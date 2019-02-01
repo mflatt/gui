@@ -22,6 +22,7 @@
          "slider.rkt"
          "tab-panel.rkt"
          "window.rkt"
+         "style.rkt"
          "procs.rkt")
 (provide 
  (protect-out platform-values))
@@ -89,6 +90,8 @@
    any-control+alt-is-altgr
    get-highlight-background-color
    get-highlight-text-color
+   get-label-foreground-color
+   get-label-background-color
    make-screen-bitmap
    make-gl-bitmap
    check-for-break

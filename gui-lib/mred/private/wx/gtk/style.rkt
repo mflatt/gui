@@ -6,7 +6,9 @@
 
 (provide 
  (protect-out get-selected-text-color
-              get-selected-background-color))
+              get-selected-background-color
+	      get-label-foreground-color
+	      get-label-background-color))
 
 (define-cstruct _GTypeInstance
   ([class _pointer]))
@@ -88,3 +90,9 @@
   
 (define (get-selected-background-color)
   (extract-color-values (GtkStyle-base4 the-text-style)))
+
+(define (get-label-foreground-color)
+  (extract-color-values (GtkStyle-fg1 the-text-style)))
+
+(define (get-label-background-color)
+  (extract-color-values (GtkStyle-bg1 the-text-style)))
