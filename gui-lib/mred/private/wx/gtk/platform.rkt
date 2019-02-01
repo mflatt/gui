@@ -22,7 +22,6 @@
          "slider.rkt"
          "tab-panel.rkt"
          "window.rkt"
-         "style.rkt"
          "procs.rkt")
 (provide 
  (protect-out platform-values))
