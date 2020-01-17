@@ -257,8 +257,9 @@
 	     [style (cons 'deleted style)])
 
   (define hwnd (get-hwnd))
+  (enable-frame-dark-mode hwnd)
   (SetLayeredWindowAttributes hwnd 0 255 LWA_ALPHA)
-
+  
   ;; record delta between size and client size
   ;; for getting the client size when the frame 
   ;; is iconized:

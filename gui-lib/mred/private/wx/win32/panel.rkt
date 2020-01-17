@@ -6,7 +6,8 @@
          "wndclass.rkt"
          "utils.rkt"
 	 "const.rkt"
-         "cursor.rkt")
+         "cursor.rkt"
+	 "theme.rkt")
 
 (provide
  (protect-out panel-mixin

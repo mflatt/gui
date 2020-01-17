@@ -15,7 +15,9 @@
               DrawThemeParentBackground
               DrawThemeBackground
               DrawThemeEdge
-              EnableThemeDialogTexture))
+              EnableThemeDialogTexture
+	      enable-dark-mode
+	      enable-frame-dark-mode))
 
 (define _HTHEME (_cpointer 'HTHEME))
 
@@ -53,6 +55,36 @@
                                                 -> (when (negative? r)
                                                      (error 'EnableThemeDialogTexture "failed: ~s" (bitwise-and #xFFFF r)))))
 
+(define-uxtheme SetWindowTheme (_wfun _HWND _string/utf-16 _pointer -> (r : _HRESULT)
+				      -> (when (negative? r)
+                                           (error 'SetWindowTheme "failed: ~s" (bitwise-and #xFFFF r)))))
+
+(define-kernel32 LoadLibraryW (_wfun _string/utf-16 -> _pointer))
+(define-kernel32 GetProcAddress (_wfun _pointer _intptr -> _pointer))
+
+(define ShouldAppUseDarkMode
+  (let ([p (GetProcAddress (LoadLibraryW "uxtheme.dll") 132)])
+    (if p
+	(cast p _pointer (_wfun -> _bool))
+	(lambda () #f))))
+
+(define-dwmapi DwmSetWindowAttribute
+  (_wfun _HWND _DWORD _pointer _DWORD -> _HRESULT))
+
+(define DWMWA_USE_IMMERSIVE_DARK_MODE 19)
+(define DWMWA_USE_IMMERSIVE_DARK_MODE_NEW 20)
+
+(define (enable-dark-mode hwnd)
+  (when (ShouldAppUseDarkMode)
+    (SetWindowTheme hwnd "DarkMode_Explorer" #f)))
+
+(define (enable-frame-dark-mode hwnd)
+  (when (ShouldAppUseDarkMode)
+    (let ([on (malloc _BOOL)])
+      (ptr-set! on _BOOL #t)
+      (when (negative? (DwmSetWindowAttribute hwnd DWMWA_USE_IMMERSIVE_DARK_MODE_NEW on (ctype-sizeof _BOOL)))
+	(DwmSetWindowAttribute hwnd DWMWA_USE_IMMERSIVE_DARK_MODE on (ctype-sizeof _BOOL))))))
+  
 (define BP_PUSHBUTTON 1)
 (define PBS_NORMAL 1)
 (define TMT_FONT 210)

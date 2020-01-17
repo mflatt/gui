@@ -12,6 +12,7 @@
 	 "window.rkt"
 	 "wndclass.rkt"
          "hbitmap.rkt"
+	 "theme.rkt"
          "types.rkt")
 
 (provide 
@@ -62,6 +63,8 @@
                                          hInstance
                                          #f)]
                [style style])
+
+    (enable-dark-mode (get-hwnd))
 
     (when bitmap?
       (let ([hbitmap (bitmap->hbitmap (if (pair? label)

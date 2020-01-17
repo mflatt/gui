@@ -146,7 +146,9 @@
   (define y-wheel 0)
 
   (super-new)
-  
+
+  (enable-dark-mode hwnd)
+
   (define eventspace (if parent
                          (send parent get-eventspace)
                          (current-eventspace)))
