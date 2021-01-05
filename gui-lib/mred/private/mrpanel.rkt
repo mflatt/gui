@@ -358,7 +358,7 @@
     
     (define/override (as-plain-panel?) use-tab-canvas?)
     (define/override (finish-wx proc)
-      (define wx (proc #f))
+      (define wx (proc (if use-tab-canvas? #f this)))
       (set! outside wx)
       (cond
         [use-tab-canvas?
