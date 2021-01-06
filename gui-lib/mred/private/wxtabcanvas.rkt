@@ -40,7 +40,6 @@
       (define y (box 0))
       (do-get-client-size x y)
       (values (unbox x) (unbox y)))
-    (define/private (stretchable-height on?) (stretchable-in-y on?))
     
     ;; ----------
     ;; internal state variables
@@ -65,6 +64,8 @@
       (unless (equal? (hash-ref items i #f) v)
         (set! items (hash-set items i v))
         (update-min-width)
+        (update-mouse-over-drawing-state)
+        (set-clicked-in #f #f)
         (refresh)))
     (define/private (set-items is)
       (define new-items
@@ -74,10 +75,14 @@
       (unless (equal? new-items items)
         (set! items new-items)
         (update-min-width)
+        (update-mouse-over-drawing-state)
+        (set-clicked-in #f #f)
         (refresh)))
     (define/private (delete-item n)
       (set! items (delete-item/hash items n))
       (update-min-width)
+      (update-mouse-over-drawing-state)
+      (set-clicked-in #f #f)
       (refresh))
 
     (define/private (reorder-items! former-indices)
@@ -128,17 +133,9 @@
         (set! clicked-in-offset new-clicked-in-offset)
         (refresh)))
     
-    ;; the current coordinates of the mouse (but only
-    ;; if the button is down and only when are between
-    ;; enter and leave events)
-    (define mouse-down-x #f)
-    (define mouse-down-y #f)
-    (define/private (set-mouse-down-xy x y)
-      (unless (and (equal? mouse-down-x x)
-                   (equal? mouse-down-y y))
-        (set! mouse-down-x x)
-        (set! mouse-down-y y)
-        (refresh)))
+    ;; the current coordinates of the mouse
+    (define mouse-x #f)
+    (define mouse-y #f)
   
     ;; ----------
     ;; public api
@@ -323,23 +320,44 @@
     ;; mouse movement
 
     (define/override (on-event evt)
+      (define leaving? (send evt leaving?))
+      (define entering? (send evt entering?))
+      (define left-down (send evt get-left-down))
+      (define button-down?-left (send evt button-down? 'left))
+      (define time-stamp (send evt get-time-stamp))
+      (define dragging? (send evt dragging?))
+      (define button-up?-left (send evt button-up? 'left))
+      (define last-mouse-x mouse-x)
+      (set! mouse-x (send evt get-x))
+      (set! mouse-y (send evt get-y))
+
       (define the-callback void)
 
+      (define-values (cw ch) (get-client-size))
       (cond
-        [(and (send evt leaving?)
-              (not (send evt get-left-down)))
+        [(or (and leaving?
+                  (not left-down))
+             (and button-up?-left
+                  (or (not (<= 0 mouse-x cw))
+                      (not (<= 0 mouse-y cw)))))
+         ;; this cannot just be `leaving?` because the mouse being
+         ;; down grabs all events to the canvas. So: if the
+         ;; button is down we don't believe the leaving event.
+         ;; BUT when the mouse is eventually released we do need
+         ;; to consider the mouse as having left the window, so we
+         ;; use the `x` and `y` coordinates to determine if we're
+         ;; outside the window when we do see the up event
          (set-mouse-over #f #f)
-         (set-mouse-down-xy #f #f)
          (set-mouse-entered? #f)
          (set-clicked-in #f #f)]
-        [(send evt entering?)
+        [entering?
          (set-mouse-entered? #t)])
 
       (when mouse-entered?
         (define-values (mouse-over mx-offset-in-tab mouse-over-close?)
-          (mouse->tab (send evt get-x) (send evt get-y)))
+          (mouse->tab mouse-x mouse-y))
         (cond
-          [(send evt button-down?)
+          [button-down?-left
            (when (and mouse-over (not mouse-over-close?))
              (set-the-selection mouse-over)
              (set! the-callback
@@ -347,15 +365,14 @@
                      (callback this
                                (new control-event%
                                     [event-type 'tab-panel]
-                                    [time-stamp (send evt get-time-stamp)])))))
-           (set-mouse-down-xy (send evt get-x) (send evt get-y))
+                                    [time-stamp time-stamp])))))
            (set-clicked-in mouse-over (and (not mouse-over-close?) mx-offset-in-tab))
            (set-mouse-over #f #f)]
-          [(send evt dragging?)
-           (set-mouse-down-xy (send evt get-x) (send evt get-y))
+          [(and left-down dragging?)
+           (unless (equal? last-mouse-x mouse-x) (refresh))
            (set-mouse-over #f (and mouse-over-close?
-                                   (eqv? clicked-in mouse-over)))]
-          [(send evt button-up?)
+                                   (equal? clicked-in mouse-over)))]
+          [button-up?-left
            (when clicked-in
              (cond
                [clicked-in-offset
@@ -366,12 +383,11 @@
                         (on-reorder former-indices)))]
                [else
                 (when (and mouse-over-close?
-                           (eqv? clicked-in mouse-over))
+                           (equal? clicked-in mouse-over))
                   (define index clicked-in)
                   (set! the-callback
                         (λ ()
                           (on-close-request index))))]))
-           (set-mouse-down-xy #f #f)
            (set-clicked-in #f #f)
            (set-mouse-over mouse-over mouse-over-close?)]
           [else
@@ -379,6 +395,15 @@
 
 
       (the-callback))
+
+    (define/private (update-mouse-over-drawing-state)
+      (cond
+        [(and mouse-x mouse-y)
+         (define-values (mouse-over mx-offset-in-tab mouse-over-close?)
+           (mouse->tab mouse-x mouse-y))
+         (set-mouse-over mouse-over mouse-over-close?)]
+        [else
+         (set-mouse-over #f #f)]))
 
     ;; -----
     ;; sizes and positions
@@ -411,7 +436,7 @@
 
     (define/private (get-left-edge-of-moving-tab)
       (ensure-in-bounds (natural-left-position 0)
-                        (- mouse-down-x clicked-in-offset)
+                        (- mouse-x clicked-in-offset)
                         (natural-left-position (- (number-of-items) 1))))
     
     (define/private (width-of-tab)
@@ -472,7 +497,7 @@
                               bottom-item-margin)
                            size-of-close-icon-circle)))
 
-    (stretchable-height #f)))
+    (stretchable-in-y #f)))
 
 ;; -----
 ;; size constants
