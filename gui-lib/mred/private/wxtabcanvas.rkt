@@ -63,7 +63,7 @@
     (define/private (set-item i v)
       (unless (equal? (hash-ref items i #f) v)
         (set! items (hash-set items i v))
-        (update-min-width)
+        (show-or-hide-scroll-thumb)
         (update-mouse-over-drawing-state)
         (set-clicked-in #f #f)
         (refresh)))
@@ -74,13 +74,13 @@
           (values i c)))
       (unless (equal? new-items items)
         (set! items new-items)
-        (update-min-width)
+        (show-or-hide-scroll-thumb)
         (update-mouse-over-drawing-state)
         (set-clicked-in #f #f)
         (refresh)))
     (define/private (delete-item n)
       (set! items (delete-item/hash items n))
-      (update-min-width)
+      (show-or-hide-scroll-thumb)
       (update-mouse-over-drawing-state)
       (set-clicked-in #f #f)
       (refresh))
@@ -90,10 +90,14 @@
                              [i (in-naturals)])
                     (values i (hash-ref items old)))))
 
-    (define scrollbars-visible? #f)
-    (define (set-scrollbars-visible nv)
-      (unless (equal? scrollbars-visible? nv)
-        (set! scrollbars-visible? nv)
+    ;; (or/c #f natural?)
+    ;; if #f there are no scroll thumbs,
+    ;; if a natural, it is the offset
+    ;; that we've scrolled over
+    (define scroll-offset #f)
+    (define (set-scroll-offset nv)
+      (unless (equal? scroll-offset nv)
+        (set! scroll-offset nv)
         (refresh)))
     
     ;; #t if we are between mouse enter and leave events, #f otherwise
@@ -192,20 +196,19 @@
       (draw-lines-between-items)
 
       ;; 3.
-      (when scrollbars-visible? (draw-scrollbars))
+      (when scroll-offset (draw-scroll-thumbs))
       
       ;; 4. draw the one that is being dragged (so it shows up on top)
       (when (and clicked-in clicked-in-offset)
         (draw-ith-item clicked-in
                        (get-left-edge-of-moving-tab))))
 
-    (define/private (draw-scrollbars)
+    (define/private (draw-scroll-thumbs)
       (define dc (get-dc))
       (send dc set-pen "black" 1 'transparent)
-      (send dc set-brush (scrollbar-background-color) 'solid)
+      (send dc set-brush (scrollthumb-background-color) 'solid)
       (define-values (cw ch) (get-client-size))
-      (define sw (* ch 2/3))
-      (define sh ch)
+      (define-values (sw sh) (get-scroll-thumb-size))
       (send dc draw-rectangle 0 0 sw sh)
       (send dc draw-rectangle (- cw sw) 0 sw sh)
       (define w-ti 1/4)
@@ -213,7 +216,7 @@
       (define points (list (cons (* (- 1 w-ti) sw) (* h-ti ch))
                            (cons (* (- 1 w-ti) sw) (* (- 1 h-ti) ch))
                            (cons (* w-ti sw) (* ch 1/2))))
-      (send dc set-brush (scrollbar-foreground-color) 'solid)
+      (send dc set-brush (scrollthumb-foreground-color) 'solid)
       (send dc draw-polygon points)
       (send dc draw-polygon (for/list ([point (in-list points)])
                               (cons (- cw (car point))
@@ -289,31 +292,34 @@
       (define-values (cw ch) (get-client-size))
       (define-values (tw th td ta) (send dc get-text-extent lab))
       (when (tw . >= . lab-space)
-        (when (lab-space . > . end-of-label-horizontal-gradient-amount)
-          (define right-edge-of-label
-            (+ x-start horizontal-item-margin lab-space))
-          (define old-brush (send dc get-brush))
-          (define old-pen (send dc get-pen))
-          (define gradient-stops
-            (list (list 0 (make-transparent tab-background-color))
-                  (list 1 tab-background-color)))
-          (send dc set-brush
-                (new brush%
-                     [gradient
-                      (new linear-gradient%
-                           [x0 (- right-edge-of-label end-of-label-horizontal-gradient-amount)]
-                           [y0 0]
-                           [x1 right-edge-of-label]
-                           [y1 0]
-                           [stops gradient-stops])]))
-          (send dc set-pen "black" 1 'transparent)
-          (send dc draw-rectangle
-                (- right-edge-of-label end-of-label-horizontal-gradient-amount)
-                0
-                end-of-label-horizontal-gradient-amount
-                ch)
-          (send dc set-pen old-pen)
-          (send dc set-brush old-brush))))
+        #;(assert (lab-space . >= . end-of-label-horizontal-gradient-amount))
+        ;; this assert should always be true because the minimum size of
+        ;; a tab label should always include a label that is at least as
+        ;; big as `end-of-label-horizontal-gradient-amount`
+        (define right-edge-of-label
+          (+ x-start horizontal-item-margin lab-space))
+        (define old-brush (send dc get-brush))
+        (define old-pen (send dc get-pen))
+        (define gradient-stops
+          (list (list 0 (make-transparent tab-background-color))
+                (list 1 tab-background-color)))
+        (send dc set-brush
+              (new brush%
+                   [gradient
+                    (new linear-gradient%
+                         [x0 (- right-edge-of-label end-of-label-horizontal-gradient-amount)]
+                         [y0 0]
+                         [x1 right-edge-of-label]
+                         [y1 0]
+                         [stops gradient-stops])]))
+        (send dc set-pen "black" 1 'transparent)
+        (send dc draw-rectangle
+              (- right-edge-of-label end-of-label-horizontal-gradient-amount)
+              0
+              end-of-label-horizontal-gradient-amount
+              ch)
+        (send dc set-pen old-pen)
+        (send dc set-brush old-brush)))
 
     (define/private (draw-close-icon x-start
                                      tab-background-color
@@ -435,6 +441,25 @@
          (set-mouse-over #f #f)]))
 
     ;; -----
+    ;; scrolling-related event handling
+    
+    (define/override (on-size)
+      (show-or-hide-scroll-thumb))
+
+    ;; called when something that might cause scrollbars to appear or disappear
+    (define/private (show-or-hide-scroll-thumb)
+      (define min-size-of-stuff (* (number-of-items) (get-min-tab-width)))
+      (define-values (cw ch) (get-client-size))
+      (define need-scrollbars? (cw . < . min-size-of-stuff))
+      (cond
+        [(and need-scrollbars? (not scroll-offset))
+         (set! scroll-offset 0)
+         (refresh)]
+        [(and (not need-scrollbars?) scroll-offset)
+         (set! scroll-offset #f)
+         (refresh)]))
+    
+    ;; -----
     ;; sizes and positions
     
     (define/private (natural-left-position i)
@@ -475,19 +500,33 @@
 
       ;; this is the maximum size that a tab will ever be
       (define unconstrained-tab-size (* (send (send dc get-font) get-point-size) 12))
-      (cond
-        [(< shrinking-required-size unconstrained-tab-size)
-         shrinking-required-size]
-        [else
-         unconstrained-tab-size]))
+      (max (min shrinking-required-size
+                unconstrained-tab-size)
+           (get-min-tab-width)))
 
-    (define/private (update-min-width)
-      (void))
+    (define/private (get-scroll-thumb-size)
+      (define-values (cw ch) (get-client-size))
+      (define sw (* ch 2/3))
+      (values sw ch))
+
     (define/private (get-min-width)
-      (define items (number-of-items))
-      (* items (+ horizontal-item-margin
-                  horizontal-item-margin
-                  size-of-close-icon-circle)))
+      (define-values (sw sh) (get-scroll-thumb-size))
+      (define min-number-of-visible-items 2)
+      (+ (* min-number-of-visible-items
+            (get-min-tab-width))
+         sw   ;; left scrollbar
+         sw)) ;; right scrollbar
+
+    ;; -> exact natural
+    (define/private (get-min-tab-width)
+      (define dc (get-dc))
+      (define-values (tw th td ta) (send dc get-text-extent "w"))
+      ;; width of an item showing only the letter `w`
+      (+ horizontal-item-margin
+         (max (inexact->exact (ceiling tw))
+              end-of-label-horizontal-gradient-amount)
+         horizontal-item-margin
+         size-of-close-icon-circle))
 
     ;; returns the position where the close x starts, relative
     ;; to the position of the start of the tab itself
@@ -564,8 +603,8 @@
 (define (text-and-close-icon-bright-color) (get-a-color 1 (not (white-on-black-panel-scheme?))))
 (define (mouse-over-close-circle-color) (get-a-color 6 (white-on-black-panel-scheme?)))
 (define (mouse-down-over-close-circle-color) (get-a-color 8 (white-on-black-panel-scheme?)))
-(define (scrollbar-background-color) (get-a-color 4 (white-on-black-panel-scheme?)))
-(define (scrollbar-foreground-color) (get-a-color 1 (white-on-black-panel-scheme?)))
+(define (scrollthumb-background-color) (get-a-color 4 (white-on-black-panel-scheme?)))
+(define (scrollthumb-foreground-color) (get-a-color 1 (white-on-black-panel-scheme?)))
 
 (define (make-transparent color)
   (make-object color%
