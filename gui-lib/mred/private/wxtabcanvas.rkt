@@ -90,6 +90,12 @@
                              [i (in-naturals)])
                     (values i (hash-ref items old)))))
 
+    (define scrollbars-visible? #f)
+    (define (set-scrollbars-visible nv)
+      (unless (equal? scrollbars-visible? nv)
+        (set! scrollbars-visible? nv)
+        (refresh)))
+    
     ;; #t if we are between mouse enter and leave events, #f otherwise
     (define mouse-entered? #f)
     (define/private (set-mouse-entered? nv)
@@ -185,11 +191,34 @@
       ;; 2.
       (draw-lines-between-items)
 
-      ;; 3. draw the one that is being dragged (so it shows up on top)
+      ;; 3.
+      (when scrollbars-visible? (draw-scrollbars))
+      
+      ;; 4. draw the one that is being dragged (so it shows up on top)
       (when (and clicked-in clicked-in-offset)
         (draw-ith-item clicked-in
                        (get-left-edge-of-moving-tab))))
 
+    (define/private (draw-scrollbars)
+      (define dc (get-dc))
+      (send dc set-pen "black" 1 'transparent)
+      (send dc set-brush (scrollbar-background-color) 'solid)
+      (define-values (cw ch) (get-client-size))
+      (define sw (* ch 2/3))
+      (define sh ch)
+      (send dc draw-rectangle 0 0 sw sh)
+      (send dc draw-rectangle (- cw sw) 0 sw sh)
+      (define w-ti 1/4)
+      (define h-ti 1/6)
+      (define points (list (cons (* (- 1 w-ti) sw) (* h-ti ch))
+                           (cons (* (- 1 w-ti) sw) (* (- 1 h-ti) ch))
+                           (cons (* w-ti sw) (* ch 1/2))))
+      (send dc set-brush (scrollbar-foreground-color) 'solid)
+      (send dc draw-polygon points)
+      (send dc draw-polygon (for/list ([point (in-list points)])
+                              (cons (- cw (car point))
+                                    (cdr point)))))
+    
     (define/private (draw-lines-between-items)
       (define dc (get-dc))
       (send dc set-pen (text-and-close-icon-dim-color) 1 'solid)
@@ -535,6 +564,8 @@
 (define (text-and-close-icon-bright-color) (get-a-color 1 (not (white-on-black-panel-scheme?))))
 (define (mouse-over-close-circle-color) (get-a-color 6 (white-on-black-panel-scheme?)))
 (define (mouse-down-over-close-circle-color) (get-a-color 8 (white-on-black-panel-scheme?)))
+(define (scrollbar-background-color) (get-a-color 4 (white-on-black-panel-scheme?)))
+(define (scrollbar-foreground-color) (get-a-color 1 (white-on-black-panel-scheme?)))
 
 (define (make-transparent color)
   (make-object color%
