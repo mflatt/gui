@@ -513,6 +513,12 @@
     (define/override (on-size)
       (show-or-hide-scroll-thumb))
 
+    (define/override (on-char evt)
+      (define wheel-speed 3)
+      (case (send evt get-key-code)
+        [(wheel-left) (set-scroll-offset (- scroll-offset wheel-speed))]
+        [(wheel-right) (set-scroll-offset (+ scroll-offset wheel-speed))]))
+
     ;; called when something that might cause scrollbars to appear or disappear
     (define/private (show-or-hide-scroll-thumb)
       (define-values (cw ch) (get-client-size))
