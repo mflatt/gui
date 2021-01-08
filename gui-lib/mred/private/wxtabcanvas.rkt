@@ -5,7 +5,8 @@
          "gdi.rkt"
          "wx/common/event.rkt"
          "wxcanvas.rkt"
-         "panel-wob.rkt")
+         "panel-wob.rkt"
+         "misc.rkt")
 
 (provide wx-tab-canvas%)
 
@@ -65,7 +66,7 @@
         (set! items (hash-set items i v))
         (show-or-hide-scroll-thumb)
         (update-mouse-over-drawing-state)
-        (set-clicked-in #f #f)
+        (set-clicked-in #f #f #f)
         (refresh)))
     (define/private (set-items is)
       (define new-items
@@ -76,13 +77,13 @@
         (set! items new-items)
         (show-or-hide-scroll-thumb)
         (update-mouse-over-drawing-state)
-        (set-clicked-in #f #f)
+        (set-clicked-in #f #f #f)
         (refresh)))
     (define/private (delete-item n)
       (set! items (delete-item/hash items n))
       (show-or-hide-scroll-thumb)
       (update-mouse-over-drawing-state)
-      (set-clicked-in #f #f)
+      (set-clicked-in #f #f #f)
       (refresh))
 
     (define/private (reorder-items! former-indices)
@@ -95,10 +96,25 @@
     ;; if a natural, it is the offset
     ;; that we've scrolled over
     (define scroll-offset #f)
+
+    ;; -> boolean
+    ;; #t indicates that the scrollbar actually changed
     (define (set-scroll-offset nv)
-      (unless (equal? scroll-offset nv)
-        (set! scroll-offset nv)
-        (refresh)))
+      (cond
+        [(equal? scroll-offset nv) #f]
+        [(not nv)
+         (set! scroll-offset #f)
+         (refresh)
+         #t]
+        [else
+         (define nv-constrained (ensure-in-bounds 0 nv (scroll-offset-rightmost)))
+         (cond
+           [(equal? nv-constrained scroll-offset)
+            #f]
+           [else
+            (set! scroll-offset nv-constrained)
+            (refresh)
+            #t])]))
     
     ;; #t if we are between mouse enter and leave events, #f otherwise
     (define mouse-entered? #f)
@@ -117,11 +133,18 @@
     ;; the close `x` for that one
     (define mouse-over-close? #f)
 
-    (define/private (set-mouse-over new-mouse-over new-mouse-over-close?)
+    ;; (or/c #f 'left 'right)
+    (define mouse-over-thumb #f)
+
+    (define/private (set-mouse-over new-mouse-over
+                                    new-mouse-over-close?
+                                    new-mouse-over-thumb)
       (unless (and (equal? mouse-over new-mouse-over)
-                   (equal? mouse-over-close? new-mouse-over-close?))
+                   (equal? mouse-over-close? new-mouse-over-close?)
+                   (equal? mouse-over-thumb new-mouse-over-thumb))
         (set! mouse-over new-mouse-over)
         (set! mouse-over-close? new-mouse-over-close?)
+        (set! mouse-over-thumb new-mouse-over-thumb)
         (refresh)))
 
     ;; (or/c #f (integer-in 0 (number-of-items)))
@@ -136,12 +159,20 @@
     ;; this is meaningful only if clicked-in is not #f
     (define clicked-in-offset #f)
 
-    (define/private (set-clicked-in new-clicked-in new-clicked-in-offset)
+    ;; (or/c 'left 'right #f)
+    ;; when not #f, the thumb-timer is running
+    ;; when not #f, scroll-offset should also not be #f
+    (define clicked-thumb #f)
+
+    (define/private (set-clicked-in new-clicked-in new-clicked-in-offset new-clicked-thumb)
       (unless (and (equal? clicked-in new-clicked-in)
-                   (equal? clicked-in-offset new-clicked-in-offset))
+                   (equal? clicked-in-offset new-clicked-in-offset)
+                   (equal? clicked-thumb new-clicked-thumb))
         (set! clicked-in new-clicked-in)
         (set! clicked-in-offset new-clicked-in-offset)
-        (refresh)))
+        (set! clicked-thumb new-clicked-thumb)
+        (refresh)
+        (maybe-start/stop-thumb-timer)))
     
     ;; the current coordinates of the mouse
     (define mouse-x #f)
@@ -216,8 +247,25 @@
       (define points (list (cons (* (- 1 w-ti) sw) (* h-ti ch))
                            (cons (* (- 1 w-ti) sw) (* (- 1 h-ti) ch))
                            (cons (* w-ti sw) (* ch 1/2))))
-      (send dc set-brush (scrollthumb-foreground-color) 'solid)
+      (send dc set-brush
+            (cond
+              [(equal? mouse-over-thumb 'left)
+               (scrollthumb-over-foreground-color)]
+              [(equal? clicked-thumb 'left)
+               (scrollthumb-clicked-foreground-color)]
+              [else
+               (scrollthumb-foreground-color)])
+            'solid)
       (send dc draw-polygon points)
+      (send dc set-brush
+            (cond
+              [(equal? mouse-over-thumb 'right)
+               (scrollthumb-over-foreground-color)]
+              [(equal? clicked-thumb 'right)
+               (scrollthumb-clicked-foreground-color)]
+              [else
+               (scrollthumb-foreground-color)])
+            'solid)
       (send dc draw-polygon (for/list ([point (in-list points)])
                               (cons (- cw (car point))
                                     (cdr point)))))
@@ -233,9 +281,12 @@
     (define/private (draw-ith-item i x-start)
       (define tab-background-color
         (cond
-          [(equal? selection i) (selected-tab-color)]
-          [(or (equal? mouse-over i) (equal? clicked-in i)) (mouse-over-tab-color)]
-          [else (natural-tab-color)]))
+          [(equal? selection i)
+           (selected-tab-color)]
+          [(or (equal? mouse-over i) (equal? clicked-in i))
+           (mouse-over-tab-color)]
+          [else
+           (natural-tab-color)]))
       (define text-and-close-foreground-color
         (cond
           [(equal? selection i) (text-and-close-icon-bright-color)]
@@ -382,51 +433,64 @@
          ;; to consider the mouse as having left the window, so we
          ;; use the `x` and `y` coordinates to determine if we're
          ;; outside the window when we do see the up event
-         (set-mouse-over #f #f)
+         (set-mouse-over #f #f #f)
          (set-mouse-entered? #f)
-         (set-clicked-in #f #f)]
+         (set-clicked-in #f #f #f)]
         [entering?
          (set-mouse-entered? #t)])
 
       (when mouse-entered?
-        (define-values (mouse-over mx-offset-in-tab mouse-over-close?)
-          (mouse->tab mouse-x mouse-y))
+        (define-values (mouse-over-tab
+                        mx-offset-in-tab
+                        mouse-over-close?
+                        mouse-over-thumb)
+          (mouse->info mouse-x mouse-y))
         (cond
           [button-down?-left
-           (when (and mouse-over (not mouse-over-close?))
-             (set-the-selection mouse-over)
+           (when (and mouse-over-tab (not mouse-over-close?))
+             (set-the-selection mouse-over-tab)
              (set! the-callback
                    (λ ()
                      (callback this
                                (new control-event%
                                     [event-type 'tab-panel]
                                     [time-stamp time-stamp])))))
-           (set-clicked-in mouse-over (and (not mouse-over-close?) mx-offset-in-tab))
-           (set-mouse-over #f #f)]
+           (set-clicked-in mouse-over-tab
+                           (and (not mouse-over-close?) mx-offset-in-tab)
+                           mouse-over-thumb)
+           (set-mouse-over #f #f #f)]
           [(and left-down dragging?)
+           ;; maybe this next line needs to refresh only when
+           ;; we are dragging a tab, not all the time?
            (unless (equal? last-mouse-x mouse-x) (refresh))
-           (set-mouse-over #f (and mouse-over-close?
-                                   (equal? clicked-in mouse-over)))]
+           (cond
+             [mouse-over-thumb
+              (set-clicked-in #f #f mouse-over-thumb)]
+             [else
+              (set-mouse-over #f
+                              (and mouse-over-close?
+                                   (equal? clicked-in mouse-over-tab))
+                              #f)])]
           [button-up?-left
            (when clicked-in
              (cond
                [clicked-in-offset
-                (define former-indices (reordered-list (number-of-items) clicked-in mouse-over))
+                (define former-indices (reordered-list (number-of-items) clicked-in mouse-over-tab))
                 (reorder-items! former-indices)
                 (set! the-callback
                       (λ ()
                         (on-reorder former-indices)))]
                [else
                 (when (and mouse-over-close?
-                           (equal? clicked-in mouse-over))
+                           (equal? clicked-in mouse-over-tab))
                   (define index clicked-in)
                   (set! the-callback
                         (λ ()
                           (on-close-request index))))]))
-           (set-clicked-in #f #f)
-           (set-mouse-over mouse-over mouse-over-close?)]
+           (set-clicked-in #f #f #f)
+           (set-mouse-over mouse-over-tab mouse-over-close? mouse-over-thumb)]
           [else
-           (set-mouse-over mouse-over mouse-over-close?)]))
+           (set-mouse-over mouse-over-tab mouse-over-close? mouse-over-thumb)]))
 
 
       (the-callback))
@@ -434,11 +498,14 @@
     (define/private (update-mouse-over-drawing-state)
       (cond
         [(and mouse-x mouse-y)
-         (define-values (mouse-over mx-offset-in-tab mouse-over-close?)
-           (mouse->tab mouse-x mouse-y))
-         (set-mouse-over mouse-over mouse-over-close?)]
+         (define-values (mouse-over-tab
+                         mx-offset-in-tab
+                         mouse-over-close?
+                         mouse-over-thumb)
+           (mouse->info mouse-x mouse-y))
+         (set-mouse-over mouse-over mouse-over-close? mouse-over-thumb)]
         [else
-         (set-mouse-over #f #f)]))
+         (set-mouse-over #f #f #f)]))
 
     ;; -----
     ;; scrolling-related event handling
@@ -448,16 +515,32 @@
 
     ;; called when something that might cause scrollbars to appear or disappear
     (define/private (show-or-hide-scroll-thumb)
-      (define min-size-of-stuff (* (number-of-items) (get-min-tab-width)))
       (define-values (cw ch) (get-client-size))
-      (define need-scrollbars? (cw . < . min-size-of-stuff))
+      (define need-scrollbars? (cw . < . (min-size-of-all-tabs-together)))
       (cond
         [(and need-scrollbars? (not scroll-offset))
-         (set! scroll-offset 0)
-         (refresh)]
+         (set-scroll-offset 0)]
         [(and (not need-scrollbars?) scroll-offset)
-         (set! scroll-offset #f)
-         (refresh)]))
+         (set-scroll-offset #f)]))
+
+    (define thumb-timer
+      (new timer%
+           [notify-callback
+            (λ ()
+              (when clicked-thumb
+                (define moved?
+                  (set-scroll-offset (if (equal? clicked-thumb 'left)
+                                         (+ scroll-offset thumb-speed)
+                                         (- scroll-offset thumb-speed))))
+                (when moved?
+                  (send thumb-timer start thumb-timer-interval #t))))]))
+
+    (define/private (maybe-start/stop-thumb-timer)
+      (cond
+        [clicked-thumb
+         (send thumb-timer start thumb-timer-interval #t)]
+        [else
+         (send thumb-timer stop)]))
     
     ;; -----
     ;; sizes and positions
@@ -467,7 +550,7 @@
     ;; taking into account the scroll position)
     (define/private (natural-left-position i)
       (define-values (sw sh) (get-scroll-thumb-size))
-      (+ (if scroll-offset (+ sw scroll-offset) 0)
+      (+ (if scroll-offset (+ sw (- scroll-offset)) 0)
          (* i (width-of-tab))))
 
     ;; determines the delta (0, -1, +1) for the `ith` tab
@@ -509,6 +592,15 @@
                 unconstrained-tab-size)
            (get-min-tab-width)))
 
+    (define/private (min-size-of-all-tabs-together)
+      (* (number-of-items) (get-min-tab-width)))
+
+    (define/private (scroll-offset-rightmost)
+      (define-values (cw ch) (get-client-size))
+      (define-values (sw sh) (get-scroll-thumb-size))
+      (define min (min-size-of-all-tabs-together))
+      (- min (- cw sw sw)))
+
     (define/private (get-scroll-thumb-size)
       (define-values (cw ch) (get-client-size))
       (define sw (* ch 2/3))
@@ -540,7 +632,7 @@
          horizontal-item-margin
          size-of-close-icon-circle))
 
-    (define/private (mouse->tab mx-in-canvas-coordinates my)
+    (define/private (mouse->info mx-in-canvas-coordinates my)
       (define-values (sw sh) (get-scroll-thumb-size))
       ;; this `mx` is in coordinates such that 0 is the left
       ;; edge of the tabs. The `mx-in-canvas-coordinates` is
@@ -552,6 +644,10 @@
       (define-values (cw ch) (get-client-size))
       (define tab-candidate-i (floor (/ mx (width-of-tab))))
       (cond
+        [(<= 0 mx-in-canvas-coordinates sw)
+         (values #f #f #f 'left)]
+        [(<= (- cw sw) mx-in-canvas-coordinates cw)
+         (values #f #f #f 'right)]
         [(<= 0 tab-candidate-i (- (number-of-items) 1))
          (define mx-offset-in-tab (- mx-in-canvas-coordinates (natural-left-position tab-candidate-i)))
          (define start-of-cross (get-start-of-cross-x-offset))
@@ -562,9 +658,9 @@
            (<= (- (/ ch 2) size-of-close-icon-circle)
                my
                (+ (/ ch 2) size-of-close-icon-circle)))
-         (values tab-candidate-i mx-offset-in-tab (and in-close-x in-close-y))]
+         (values tab-candidate-i mx-offset-in-tab (and in-close-x in-close-y) #f)]
         [else
-         (values #f #f #f)]))
+         (values #f #f #f #f)]))
 
     (let ()
       (define dc (get-dc))
@@ -593,6 +689,12 @@
 (define size-of-close-icon-x 6)
 (define size-of-close-icon-circle 12)
 
+;; in msec
+(define thumb-timer-interval 30)
+
+;; in pixels (need to be able to speed this up, so this is wrong)
+(define thumb-speed 2)
+
 ;; ------
 ;; color constants
 (define shade-delta 16)
@@ -618,6 +720,8 @@
 (define (mouse-down-over-close-circle-color) (get-a-color 8 (white-on-black-panel-scheme?)))
 (define (scrollthumb-background-color) (get-a-color 4 (white-on-black-panel-scheme?)))
 (define (scrollthumb-foreground-color) (get-a-color 1 (white-on-black-panel-scheme?)))
+(define (scrollthumb-over-foreground-color) (get-a-color 2 (white-on-black-panel-scheme?)))
+(define (scrollthumb-clicked-foreground-color) (get-a-color 6 (white-on-black-panel-scheme?)))
 
 (define (make-transparent color)
   (make-object color%
@@ -694,4 +798,3 @@
   (check-equal? (reordered-list 5 3 2) '(0 1 3 2 4))
   (check-equal? (reordered-list 6 2 5) '(0 1 3 4 5 2))
   (check-equal? (reordered-list 6 5 1) '(0 5 1 2 3 4)))
-
