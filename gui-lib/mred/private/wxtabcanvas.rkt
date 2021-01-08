@@ -195,13 +195,13 @@
       ;; 2.
       (draw-lines-between-items)
 
-      ;; 3.
-      (when scroll-offset (draw-scroll-thumbs))
-      
-      ;; 4. draw the one that is being dragged (so it shows up on top)
+      ;; 3. draw the one that is being dragged (so it shows up on top)
       (when (and clicked-in clicked-in-offset)
         (draw-ith-item clicked-in
-                       (get-left-edge-of-moving-tab))))
+                       (get-left-edge-of-moving-tab)))
+
+      ;; 4.
+      (when scroll-offset (draw-scroll-thumbs)))
 
     (define/private (draw-scroll-thumbs)
       (define dc (get-dc))
@@ -461,9 +461,14 @@
     
     ;; -----
     ;; sizes and positions
-    
+
+    ;; returns the position in the coordinates that
+    ;; we should use to draw into the canvas (so
+    ;; taking into account the scroll position)
     (define/private (natural-left-position i)
-      (* i (width-of-tab)))
+      (define-values (sw sh) (get-scroll-thumb-size))
+      (+ (if scroll-offset (+ sw scroll-offset) 0)
+         (* i (width-of-tab))))
 
     ;; determines the delta (0, -1, +1) for the `ith` tab
     ;; due to some other tab being dragged around
@@ -535,12 +540,20 @@
          horizontal-item-margin
          size-of-close-icon-circle))
 
-    (define/private (mouse->tab mx my)
+    (define/private (mouse->tab mx-in-canvas-coordinates my)
+      (define-values (sw sh) (get-scroll-thumb-size))
+      ;; this `mx` is in coordinates such that 0 is the left
+      ;; edge of the tabs. The `mx-in-canvas-coordinates` is
+      ;; such that the left edge is the left edge of the window
+      ;; (even including the scroll thumbs)
+      (define mx (if scroll-offset
+                     (- mx-in-canvas-coordinates (+ sw scroll-offset))
+                     mx-in-canvas-coordinates))
       (define-values (cw ch) (get-client-size))
       (define tab-candidate-i (floor (/ mx (width-of-tab))))
       (cond
         [(<= 0 tab-candidate-i (- (number-of-items) 1))
-         (define mx-offset-in-tab (- mx (natural-left-position tab-candidate-i)))
+         (define mx-offset-in-tab (- mx-in-canvas-coordinates (natural-left-position tab-candidate-i)))
          (define start-of-cross (get-start-of-cross-x-offset))
          (define-values (cw ch) (get-client-size))
          (define in-close-x
