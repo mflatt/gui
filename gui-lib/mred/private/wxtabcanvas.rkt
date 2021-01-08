@@ -530,8 +530,8 @@
               (when clicked-thumb
                 (define moved?
                   (set-scroll-offset (if (equal? clicked-thumb 'left)
-                                         (+ scroll-offset thumb-speed)
-                                         (- scroll-offset thumb-speed))))
+                                         (- scroll-offset thumb-speed)
+                                         (+ scroll-offset thumb-speed))))
                 (when moved?
                   (send thumb-timer start thumb-timer-interval #t))))]))
 
@@ -639,7 +639,7 @@
       ;; such that the left edge is the left edge of the window
       ;; (even including the scroll thumbs)
       (define mx (if scroll-offset
-                     (- mx-in-canvas-coordinates (+ sw scroll-offset))
+                     (+ mx-in-canvas-coordinates scroll-offset (- sw))
                      mx-in-canvas-coordinates))
       (define-values (cw ch) (get-client-size))
       (define tab-candidate-i (floor (/ mx (width-of-tab))))
