@@ -4,6 +4,7 @@
          "wx.rkt"
          "gdi.rkt"
          "wx/common/event.rkt"
+         "wx/common/queue.rkt"
          "wxcanvas.rkt"
          "panel-wob.rkt"
          "misc.rkt")
@@ -100,21 +101,13 @@
     ;; -> boolean
     ;; #t indicates that the scrollbar actually changed
     (define (set-scroll-offset nv)
+      (define nv-constrained (and nv (ensure-in-bounds 0 nv (scroll-offset-rightmost))))
       (cond
-        [(equal? scroll-offset nv) #f]
-        [(not nv)
-         (set! scroll-offset #f)
-         (refresh)
-         #t]
+        [(equal? nv-constrained scroll-offset) #f]
         [else
-         (define nv-constrained (ensure-in-bounds 0 nv (scroll-offset-rightmost)))
-         (cond
-           [(equal? nv-constrained scroll-offset)
-            #f]
-           [else
-            (set! scroll-offset nv-constrained)
-            (refresh)
-            #t])]))
+         (set! scroll-offset nv-constrained)
+         (refresh)
+         #t]))
     
     ;; #t if we are between mouse enter and leave events, #f otherwise
     (define mouse-entered? #f)
@@ -325,7 +318,7 @@
       (send dc set-brush tab-background-color 'solid)
       (send dc set-pen "black" 1 'transparent)
       (send dc draw-rectangle x-start 0 (width-of-tab) ch)
-      
+
       (send dc set-clipping-rect
             (+ x-start horizontal-item-margin)
             0
@@ -522,10 +515,23 @@
 
     (define/override (on-char evt)
       (reset-cache)
-      (define wheel-speed 3)
       (case (send evt get-key-code)
-        [(wheel-left) (set-scroll-offset (- scroll-offset wheel-speed))]
-        [(wheel-right) (set-scroll-offset (+ scroll-offset wheel-speed))]))
+        [(wheel-left) (scroll-with-low-priority-event -1)]
+        [(wheel-right) (scroll-with-low-priority-event 1)]))
+
+    (define pending-scroll-amount #f)
+    (define/private (scroll-with-low-priority-event amount)
+      (cond
+        [pending-scroll-amount
+         (set! pending-scroll-amount (+ amount pending-scroll-amount))]
+        [else
+         (set! pending-scroll-amount amount)
+         (queue-callback
+          (λ ()
+            (when scroll-offset
+              (set-scroll-offset (+ scroll-offset pending-scroll-amount)))
+            (set! pending-scroll-amount #f))
+          #f)]))
 
     ;; called when something that might cause scrollbars to appear or disappear
     (define/private (show-or-hide-scroll-thumb)
