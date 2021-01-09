@@ -7,7 +7,7 @@
          "wx/common/event.rkt"
          "wx/common/queue.rkt"
          "wxcanvas.rkt"
-         "panel-wob.rkt"
+         (prefix-in compute: "panel-wob.rkt")
          "misc.rkt")
 
 (provide wx-tab-canvas%)
@@ -619,9 +619,12 @@
                         (- mouse-x clicked-in-offset)
                         (natural-left-position (- (number-of-items) 1))))
 
-    ;; INVARIANT: this must be called at the start of the handling of each event
-    (define/private (enable-cache) (set! the-width-of-tab (compute-width-of-tab)))
-    (define/private (disable-cache) (set! the-width-of-tab 'compute-it))
+    (define/private (enable-cache)
+      (thread-cell-set! wob (compute:white-on-black-panel-scheme?))
+      (set! the-width-of-tab (compute-width-of-tab)))
+    (define/private (disable-cache)
+      (thread-cell-set! wob 'compute-it)
+      (set! the-width-of-tab 'compute-it))
     (define the-width-of-tab 'compute-it)
     (define/private (width-of-tab)
       (match the-width-of-tab
@@ -638,6 +641,8 @@
       (max (min shrinking-required-size
                 unconstrained-tab-size)
            (get-min-tab-width)))
+
+    (define/private (white-on-black-panel-scheme?) #f)
 
     (define/private (min-size-of-all-tabs-together)
       (* (number-of-items) (get-min-tab-width)))
@@ -757,6 +762,13 @@
                      (make-object color% 255-of 255-of 255-of))))
   (define pr (hash-ref colors shade-count))
   (if dark? (car pr) (cdr pr)))
+
+(define wob (make-thread-cell 'compute))
+(define (white-on-black-panel-scheme?)
+  (define v (thread-cell-ref wob))
+  (cond
+    [(boolean? v) v]
+    [else (compute:white-on-black-panel-scheme?)]))
 
 (define (natural-tab-color) (get-a-color 1 (white-on-black-panel-scheme?)))
 (define (mouse-over-tab-color) (get-a-color 2 (white-on-black-panel-scheme?)))
