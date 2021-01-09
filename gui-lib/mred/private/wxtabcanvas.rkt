@@ -544,23 +544,40 @@
         [(and (not need-scrollbars?) scroll-offset)
          (set-scroll-offset #f)]))
 
+    (define thumb-timer-start-seconds #f)
     (define thumb-timer
       (new timer%
            [notify-callback
             (λ ()
-              (when clicked-thumb
-                (define moved?
-                  (set-scroll-offset (if (equal? clicked-thumb 'left)
-                                         (- scroll-offset thumb-speed)
-                                         (+ scroll-offset thumb-speed))))
-                (when moved?
-                  (send thumb-timer start thumb-timer-interval #t))))]))
+              (cond
+                [clicked-thumb
+                 (define (round-up-to-nearest-1/2 n)
+                   (/ (inexact->exact (ceiling (* n 2))) 2))
+                 (define number-of-seconds-since-click
+                   (/ (- (current-inexact-milliseconds) thumb-timer-start-seconds)
+                      1000))
+                 (define rounded-up-to-nearest-1/2
+                   (/ (inexact->exact (ceiling (* number-of-seconds-since-click 2))) 2))
+                 (define thumb-speed (+ 1 rounded-up-to-nearest-1/2)) ;; go a little faster
+                 (define moved?
+                   (set-scroll-offset (if (equal? clicked-thumb 'left)
+                                          (- scroll-offset rounded-up-to-nearest-1/2)
+                                          (+ scroll-offset rounded-up-to-nearest-1/2))))
+                 (cond
+                   [moved?
+                    (send thumb-timer start thumb-timer-interval #t)]
+                   [else
+                    (set! thumb-timer-start-seconds #f)])]
+                [else
+                 (set! thumb-timer-start-seconds #f)]))]))
 
     (define/private (maybe-start/stop-thumb-timer)
       (cond
         [clicked-thumb
+         (set! thumb-timer-start-seconds (current-inexact-milliseconds))
          (send thumb-timer start thumb-timer-interval #t)]
         [else
+         (set! thumb-timer-start-seconds #f)
          (send thumb-timer stop)]))
     
     ;; -----
