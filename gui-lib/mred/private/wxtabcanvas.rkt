@@ -478,10 +478,11 @@
              (cond
                [clicked-in-offset
                 (define former-indices (reordered-list (number-of-items) clicked-in mouse-over-tab))
-                (reorder-items! former-indices)
-                (set! the-callback
-                      (λ ()
-                        (on-reorder former-indices)))]
+                (when former-indices
+                  (reorder-items! former-indices)
+                  (set! the-callback
+                        (λ ()
+                          (on-reorder former-indices))))]
                [else
                 (when (and mouse-over-close?
                            (equal? clicked-in mouse-over-tab))
@@ -845,19 +846,25 @@
 
 ;; computes mapping of new index to old index when
 ;; clicked-in is dragged to mouse-over
+;; returns #f if nothing would change
 (define (reordered-list number-of-items clicked-in mouse-over)
-  (for/list ([i (in-range number-of-items)])
-    (cond
-      [(or (i . < . (min clicked-in mouse-over))
-           (i . > . (max clicked-in mouse-over)))
-       i]
-      [(= i mouse-over) clicked-in]
-      [(clicked-in . < . mouse-over) (add1 i)]
-      [else (sub1 i)])))
+  (cond
+    [(= clicked-in mouse-over) #f]
+    [else
+     (for/list ([i (in-range number-of-items)])
+       (cond
+         [(or (i . < . (min clicked-in mouse-over))
+              (i . > . (max clicked-in mouse-over)))
+          i]
+         [(= i mouse-over) clicked-in]
+         [(clicked-in . < . mouse-over) (add1 i)]
+         [else (sub1 i)]))]))
 
 (module+ test
-  (check-equal? (reordered-list 1 0 0) '(0))
+  (check-equal? (reordered-list 1 0 0) #f)
+  (check-equal? (reordered-list 2 1 0) '(1 0))
   (check-equal? (reordered-list 5 2 3) '(0 1 3 2 4))
   (check-equal? (reordered-list 5 3 2) '(0 1 3 2 4))
   (check-equal? (reordered-list 6 2 5) '(0 1 3 4 5 2))
-  (check-equal? (reordered-list 6 5 1) '(0 5 1 2 3 4)))
+  (check-equal? (reordered-list 6 5 1) '(0 5 1 2 3 4))
+  (check-equal? (reordered-list 6 2 2) #f))
