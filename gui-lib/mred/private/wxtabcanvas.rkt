@@ -251,20 +251,24 @@
                            (cons (* w-ti sw) (* ch 1/2))))
       (send dc set-brush
             (cond
-              [(equal? mouse-over-thumb 'left)
-               (scrollthumb-over-foreground-color)]
+              [(= scroll-offset 0)
+               (scrollthumb-all-the-way-over)]
               [(equal? clicked-thumb 'left)
                (scrollthumb-clicked-foreground-color)]
+              [(equal? mouse-over-thumb 'left)
+               (scrollthumb-over-foreground-color)]
               [else
                (scrollthumb-foreground-color)])
             'solid)
       (send dc draw-polygon points)
       (send dc set-brush
             (cond
-              [(equal? mouse-over-thumb 'right)
-               (scrollthumb-over-foreground-color)]
+              [(= scroll-offset (scroll-offset-rightmost))
+               (scrollthumb-all-the-way-over)]
               [(equal? clicked-thumb 'right)
                (scrollthumb-clicked-foreground-color)]
+              [(equal? mouse-over-thumb 'right)
+               (scrollthumb-over-foreground-color)]
               [else
                (scrollthumb-foreground-color)])
             'solid)
@@ -779,9 +783,10 @@
 (define (mouse-over-close-circle-color) (get-a-color 6 (white-on-black-panel-scheme?)))
 (define (mouse-down-over-close-circle-color) (get-a-color 8 (white-on-black-panel-scheme?)))
 (define (scrollthumb-background-color) (get-a-color 4 (white-on-black-panel-scheme?)))
-(define (scrollthumb-foreground-color) (get-a-color 1 (white-on-black-panel-scheme?)))
-(define (scrollthumb-over-foreground-color) (get-a-color 2 (white-on-black-panel-scheme?)))
-(define (scrollthumb-clicked-foreground-color) (get-a-color 6 (white-on-black-panel-scheme?)))
+(define (scrollthumb-foreground-color) (get-a-color 9 (white-on-black-panel-scheme?)))
+(define (scrollthumb-over-foreground-color) (get-a-color 11 (white-on-black-panel-scheme?)))
+(define (scrollthumb-clicked-foreground-color) (get-a-color 13 (white-on-black-panel-scheme?)))
+(define (scrollthumb-all-the-way-over) (get-a-color 1 (white-on-black-panel-scheme?)))
 
 (define transparent-cache (make-hasheq))
 (define (make-transparent color)
