@@ -205,6 +205,7 @@
     (define orig-ascent 0)
 
     (define/override (on-paint)
+      (reset-cache)
       (define dc (get-dc))
       (send dc set-smoothing 'smoothed)
       (send dc set-font font)
@@ -214,14 +215,18 @@
                 "black"))
 
       ;; 1. draw the items that aren't being dragged
+      (define-values (cw ch) (get-client-size))
+      (define tw (width-of-tab))
       (for ([i (in-range (number-of-items))])
         (define skip-this-drawing-because-it-is-moving?
           (and (equal? i clicked-in)
                (number? clicked-in-offset)))
         (unless skip-this-drawing-because-it-is-moving?
           (define ith-offset (find-ith-offset i))
-          (draw-ith-item i
-                         (natural-left-position (+ i ith-offset)))))
+          (define sp (natural-left-position (+ i ith-offset)))
+          (unless (< (+ sp tw) 0) ;; entirely to the left of being visible
+            (unless (< cw sp)     ;; entirely to the right of being visible
+              (draw-ith-item i sp)))))
 
       ;; 2.
       (draw-lines-between-items)
@@ -406,6 +411,7 @@
     ;; mouse movement
 
     (define/override (on-event evt)
+      (reset-cache)
       (define leaving? (send evt leaving?))
       (define entering? (send evt entering?))
       (define left-down (send evt get-left-down))
@@ -511,9 +517,11 @@
     ;; scrolling-related event handling
     
     (define/override (on-size)
+      (reset-cache)
       (show-or-hide-scroll-thumb))
 
     (define/override (on-char evt)
+      (reset-cache)
       (define wheel-speed 3)
       (case (send evt get-key-code)
         [(wheel-left) (set-scroll-offset (- scroll-offset wheel-speed))]
@@ -586,8 +594,15 @@
       (ensure-in-bounds (natural-left-position 0)
                         (- mouse-x clicked-in-offset)
                         (natural-left-position (- (number-of-items) 1))))
-    
+
+    ;; INVARIANT: this must be called at the start of the handling of each event
+    (define/private (reset-cache) (set! the-width-of-tab #f))
+    (define the-width-of-tab #f)
     (define/private (width-of-tab)
+      (unless the-width-of-tab
+        (set! the-width-of-tab (compute-width-of-tab)))
+      the-width-of-tab)
+    (define/private (compute-width-of-tab)
       (define-values (cw ch) (get-client-size))
       (define dc (get-dc))
       (define shrinking-required-size (/ cw (number-of-items)))
@@ -729,12 +744,16 @@
 (define (scrollthumb-over-foreground-color) (get-a-color 2 (white-on-black-panel-scheme?)))
 (define (scrollthumb-clicked-foreground-color) (get-a-color 6 (white-on-black-panel-scheme?)))
 
+(define transparent-cache (make-hasheq))
 (define (make-transparent color)
-  (make-object color%
-    (send color red)
-    (send color green)
-    (send color blue)
-    0))
+  (hash-ref! transparent-cache
+             color
+             (λ ()
+               (make-object color%
+                 (send color red)
+                 (send color green)
+                 (send color blue)
+                 0))))
 
 (define (ensure-in-bounds low x high)
   (max (min x high) low))
