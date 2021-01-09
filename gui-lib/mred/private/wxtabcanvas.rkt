@@ -149,9 +149,11 @@
     (define clicked-in #f)
 
     ;; (or/c #f natural?)
-    ;; indicates the offset from the start where the
-    ;; clicked-in tab was first clicked in or that
-    ;; the close button was clicked on (when it is #f)
+    ;; if a natural? then
+    ;;  - indicates the offset from the start where the
+    ;;    clicked-in tab was first clicked in
+    ;; if #f then
+    ;;  - close button was clicked in the `clicked-in` tab
     ;; this is meaningful only if clicked-in is not #f
     (define clicked-in-offset #f)
 
@@ -464,9 +466,15 @@
                                (new control-event%
                                     [event-type 'tab-panel]
                                     [time-stamp time-stamp])))))
-           (set-clicked-in mouse-over-tab
-                           (and (not mouse-over-close?) mx-offset-in-tab)
-                           mouse-over-thumb)
+           (cond
+             [(can-reorder?)
+              (set-clicked-in mouse-over-tab
+                              (and (not mouse-over-close?) mx-offset-in-tab)
+                              mouse-over-thumb)]
+             [else
+              (set-clicked-in (and mouse-over-close? mouse-over-tab)
+                              #f
+                              mouse-over-thumb)])
            (set-mouse-over #f #f #f)]
           [(and left-down dragging?)
            ;; maybe this next line needs to refresh only when
