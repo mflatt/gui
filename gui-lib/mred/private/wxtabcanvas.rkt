@@ -17,15 +17,16 @@
 (define wx-tab-canvas%
   (class* wx-canvas% (wx/client-adjacent<%>)
     (init choices)
-    (init [style '()])
-    (init-field [font normal-control-font])
-    (init-field [on-close-request void]
-                [on-reorder void])
+    (init-field style font on-close-request on-reorder)
     (init-rest init-args)
     (apply super-make-object init-args)
 
     (define callback void)
     (define/public (set-callback proc) (set! callback proc))
+
+    (printf "style ~s\n" style)
+    (define/private (can-reorder?) (member 'can-reorder style))
+    (define/private (can-close?) (member 'can-close style))
 
     ;; ----------------------------------------
 
@@ -320,7 +321,7 @@
       (define lab-space (- (width-of-tab)
                            horizontal-item-margin
                            horizontal-item-margin
-                           size-of-close-icon-circle))
+                           (if (can-close?) size-of-close-icon-circle 0)))
       (define-values (cw ch) (get-client-size))
 
       (send dc set-brush tab-background-color 'solid)
@@ -339,10 +340,11 @@
             (+ top-item-margin (- orig-ascent (- th td))))
       (send dc set-clipping-region #f)
       (maybe-draw-fade-at-edge lab lab-space x-start tab-background-color)
-      (draw-close-icon x-start
-                       tab-background-color
-                       text-and-close-foreground-color
-                       close-circle-color))
+      (when (can-close?)
+        (draw-close-icon x-start
+                         tab-background-color
+                         text-and-close-foreground-color
+                         close-circle-color)))
     
     (define/private (maybe-draw-fade-at-edge lab lab-space x-start tab-background-color)
       (define dc (get-dc))
@@ -378,6 +380,7 @@
         (send dc set-pen old-pen)
         (send dc set-brush old-brush)))
 
+    ;; pre: (can-close?) = #t
     (define/private (draw-close-icon x-start
                                      tab-background-color
                                      text-and-close-foreground-color
@@ -678,14 +681,14 @@
          (max (inexact->exact (ceiling tw))
               end-of-label-horizontal-gradient-amount)
          horizontal-item-margin
-         size-of-close-icon-circle))
+         (if (can-close?) size-of-close-icon-circle 0)))
 
     ;; returns the position where the close x starts, relative
     ;; to the position of the start of the tab itself
     (define/private (get-start-of-cross-x-offset)
       (- (width-of-tab)
          horizontal-item-margin
-         size-of-close-icon-circle))
+         (if (can-close?) size-of-close-icon-circle 0)))
 
     (define/private (mouse->info mx-in-canvas-coordinates my)
       (define-values (sw sh) (get-scroll-thumb-size))
@@ -708,11 +711,15 @@
          (define start-of-cross (get-start-of-cross-x-offset))
          (define-values (cw ch) (get-client-size))
          (define in-close-x
-           (<= start-of-cross mx-offset-in-tab (+ start-of-cross size-of-close-icon-circle)))
+           (and (can-close?)
+                (<= start-of-cross
+                    mx-offset-in-tab
+                    (+ start-of-cross size-of-close-icon-circle))))
          (define in-close-y
-           (<= (- (/ ch 2) size-of-close-icon-circle)
-               my
-               (+ (/ ch 2) size-of-close-icon-circle)))
+           (and (can-close?)
+                (<= (- (/ ch 2) size-of-close-icon-circle)
+                    my
+                    (+ (/ ch 2) size-of-close-icon-circle))))
          (values tab-candidate-i mx-offset-in-tab (and in-close-x in-close-y) #f)]
         [else
          (values #f #f #f #f)]))
@@ -727,7 +734,7 @@
       (set-min-height (max (+ top-item-margin
                               (ceiling (inexact->exact th))
                               bottom-item-margin)
-                           size-of-close-icon-circle)))
+                           (if (can-close?) size-of-close-icon-circle 0))))
 
     (stretchable-in-y #f)))
 
