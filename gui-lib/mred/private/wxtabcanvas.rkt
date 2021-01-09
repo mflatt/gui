@@ -107,6 +107,7 @@
         [(equal? nv-constrained scroll-offset) #f]
         [else
          (set! scroll-offset nv-constrained)
+         (update-mouse-over-drawing-state)
          (refresh)
          #t]))
     
@@ -504,7 +505,7 @@
                          mouse-over-close?
                          mouse-over-thumb)
            (mouse->info mouse-x mouse-y))
-         (set-mouse-over mouse-over mouse-over-close? mouse-over-thumb)]
+         (set-mouse-over mouse-over-tab mouse-over-close? mouse-over-thumb)]
         [else
          (set-mouse-over #f #f #f)]))
 
