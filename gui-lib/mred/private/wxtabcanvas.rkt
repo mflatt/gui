@@ -1,6 +1,7 @@
 #lang racket/base
 (require racket/class
          racket/draw
+         racket/match
          "wx.rkt"
          "gdi.rkt"
          "wx/common/event.rkt"
@@ -198,7 +199,7 @@
     (define orig-ascent 0)
 
     (define/override (on-paint)
-      (reset-cache)
+      (enable-cache)
       (define dc (get-dc))
       (send dc set-smoothing 'smoothed)
       (send dc set-font font)
@@ -230,7 +231,9 @@
                        (get-left-edge-of-moving-tab)))
 
       ;; 4.
-      (when scroll-offset (draw-scroll-thumbs)))
+      (when scroll-offset (draw-scroll-thumbs))
+
+      (disable-cache))
 
     (define/private (draw-scroll-thumbs)
       (define dc (get-dc))
@@ -404,7 +407,6 @@
     ;; mouse movement
 
     (define/override (on-event evt)
-      (reset-cache)
       (define leaving? (send evt leaving?))
       (define entering? (send evt entering?))
       (define left-down (send evt get-left-down))
@@ -510,11 +512,9 @@
     ;; scrolling-related event handling
     
     (define/override (on-size)
-      (reset-cache)
       (show-or-hide-scroll-thumb))
 
     (define/override (on-char evt)
-      (reset-cache)
       (case (send evt get-key-code)
         [(wheel-left) (scroll-with-low-priority-event -1)]
         [(wheel-right) (scroll-with-low-priority-event 1)]))
@@ -602,12 +602,14 @@
                         (natural-left-position (- (number-of-items) 1))))
 
     ;; INVARIANT: this must be called at the start of the handling of each event
-    (define/private (reset-cache) (set! the-width-of-tab #f))
-    (define the-width-of-tab #f)
+    (define/private (enable-cache) (set! the-width-of-tab (compute-width-of-tab)))
+    (define/private (disable-cache) (set! the-width-of-tab 'compute-it))
+    (define the-width-of-tab 'compute-it)
     (define/private (width-of-tab)
-      (unless the-width-of-tab
-        (set! the-width-of-tab (compute-width-of-tab)))
-      the-width-of-tab)
+      (match the-width-of-tab
+        ['compute-it
+         (compute-width-of-tab)]
+        [(? number? n) n]))
     (define/private (compute-width-of-tab)
       (define-values (cw ch) (get-client-size))
       (define dc (get-dc))
