@@ -556,8 +556,6 @@
             (λ ()
               (cond
                 [clicked-thumb
-                 (define (round-up-to-nearest-1/2 n)
-                   (/ (inexact->exact (ceiling (* n 2))) 2))
                  (define number-of-seconds-since-click
                    (/ (- (current-inexact-milliseconds) thumb-timer-start-seconds)
                       1000))
@@ -701,9 +699,9 @@
       (define-values (cw ch) (get-client-size))
       (define tab-candidate-i (floor (/ mx (width-of-tab))))
       (cond
-        [(<= 0 mx-in-canvas-coordinates sw)
+        [(and scroll-offset (<= 0 mx-in-canvas-coordinates sw))
          (values #f #f #f 'left)]
-        [(<= (- cw sw) mx-in-canvas-coordinates cw)
+        [(and scroll-offset (<= (- cw sw) mx-in-canvas-coordinates cw))
          (values #f #f #f 'right)]
         [(<= 0 tab-candidate-i (- (number-of-items) 1))
          (define mx-offset-in-tab (- mx-in-canvas-coordinates (natural-left-position tab-candidate-i)))
