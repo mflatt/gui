@@ -324,7 +324,9 @@
 
 (define tab-panel%
   (class vertical-panel%
-    (init choices parent [callback (lambda (b e) (void))] [style null] [font no-val]
+    (init choices parent [callback (lambda (b e) (void))])
+    (init-field [style null])
+    (init [font no-val]
           ;; inherited inits
           [enabled #t]
           [vert-margin no-val]
@@ -364,7 +366,7 @@
         [use-tab-canvas?
          (set! tab-canvas (make-object wx-tab-canvas%
                                        save-choices
-                                       '() ; style
+                                       style
                                        (if (eq? init-font no-val)
                                            normal-control-font
                                            init-font)
