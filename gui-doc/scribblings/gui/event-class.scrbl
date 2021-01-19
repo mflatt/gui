@@ -34,8 +34,9 @@ See @method[event% get-time-stamp] for information about
            exact-integer?]{
 
 Returns the time, in milliseconds, when the event occurred. This time
- is compatible with times reported by Racket's
- @racket[current-milliseconds] procedure.
+ tends @emph{not} to compatible with times reported by Racket's
+ @racket[current-milliseconds] procedure, since it is typically
+ based on the system reboot time.
 
 }
 
@@ -43,7 +44,7 @@ Returns the time, in milliseconds, when the event occurred. This time
            void?]{
 
 Set the time, in milliseconds, when the event occurred. See also
- Racket's @racket[current-milliseconds].
+ @method[event% get-time-stamp].
 
 If the supplied value is outside the platform-specific range of time
  values, @|MismatchExn|.
