@@ -248,9 +248,12 @@
                      (cairo_set_matrix cr save-mx)
                      (cairo_clip cr)))))))
 
+;; `cr` has not been scaled, yet, because if `bm` is bitmap, it likely
+;; uses the same scale; Cairo is not good at canceling those scales
 (define (backing-draw-bm bm cr w h [dx 0] [dy 0] [backing-scale 1.0])
   (if (procedure? bm)
       (begin
+        (cairo_scale cr backing-scale backing-scale)
         (send cairo-dc reset-config backing-scale)
         (send cairo-dc set-cr cr w h)
 	(unless (and (zero? dx) (zero? dy))
@@ -259,11 +262,12 @@
         (send cairo-dc set-cr #f 0 0))
       (let ([s (cairo_get_source cr)])
 	(unless (and (zero? dx) (zero? dy))
-	  (cairo_translate cr dx dy))
+	  (cairo_translate cr (* dx backing-scale) (* dy backing-scale)))
         (cairo_pattern_reference s)
         (cairo_set_source_surface cr (send bm get-cairo-surface) 0 0)
-        (let ([sc (send bm get-cairo-device-scale)])
-          (unless (= sc 1)
+        (let ([sc (/ (send bm get-cairo-device-scale)
+                     backing-scale)])
+          (unless (= sc 1.0)
             (let ([m (make-cairo_matrix_t 0.0 0.0 0.0 0.0 0.0 0.0)])
               (cairo_matrix_init_translate m 0 0)
               (cairo_matrix_scale m sc sc)

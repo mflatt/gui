@@ -239,7 +239,6 @@
             (let ([cr (if gtk3?
 			  win-or-cr
 			  (gdk_cairo_create win-or-cr))])
-	      (cairo_scale cr (->screen 1.0) (->screen 1.0))
               (backing-draw-bm bm cr (unbox w) (unbox h) 0 0 (->screen 1.0))
 	      (unless gtk3?
                 (cairo_destroy cr)))))))

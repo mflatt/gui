@@ -154,7 +154,6 @@
 		     [cr (cairo_create surface)]
 		     [hdc2 (cairo_win32_surface_get_dc surface)])
 		(BitBlt hdc2 0 0 cw ch hdc (RECT-left r) (RECT-top r) SRCCOPY)
-		(cairo_scale cr (->screen 1.0) (->screen 1.0))
 		(backing-draw-bm bm cr (->normal sw) (->normal sh)
 				 (->normal (- (RECT-left r))) (->normal (- (RECT-top r)))
 				 (->screen 1.0))
@@ -166,7 +165,6 @@
 	      (let* ([surface (cairo_win32_surface_create hdc)]
 		     [cr (cairo_create surface)])
 		(cairo_surface_destroy surface)
-		(cairo_scale cr (->screen 1.0) (->screen 1.0))
 		(backing-draw-bm bm cr (->normal sw) (->normal sh)
 				 0 0
 				 (->screen 1.0))
