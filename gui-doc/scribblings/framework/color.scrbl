@@ -456,6 +456,13 @@
     This method must be called only when the tokenizer is started.
   }
 
+  @defmethod[(get-backward-navigation-limit (start exact-integer?))
+             exact-integer?]{
+    Returns a limit for backward-matching parenthesis starting at position
+    @racket[start].
+
+   @history[#:added "1.65"]}
+
   @defmethod[#:mode pubment (on-lexer-valid [valid? boolean?]) any]{
     This method is an observer for when the lexer is working.  It is called
     when the lexer's state changes from valid to invalid (and back).  The
