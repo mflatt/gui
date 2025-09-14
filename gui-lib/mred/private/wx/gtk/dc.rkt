@@ -193,6 +193,10 @@
 	    (when v (set! gl v))
 	    v)))
 
+    (define/public (update-canvas-size x y w h)
+      (when gl
+	(send gl update-size x y w h)))
+
     (define/override (make-backing-bitmap w h)
       (cond
        [(and (not is-transparentish?)

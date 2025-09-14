@@ -5,14 +5,18 @@
          ffi/unsafe
          ffi/unsafe/define
          ffi/unsafe/alloc
+         ffi/unsafe/atomic
          ffi/cvector
          (prefix-in draw: racket/draw/private/gl-context)
          racket/draw/private/gl-config
          "../../lock.rkt"
          "types.rkt"
          "utils.rkt"
+         "widget.rkt"
          "window.rkt"
-         "x11.rkt")
+         "x11.rkt"
+	 "queue.rkt"
+	 "wayland.rkt")
 
 (provide
  (protect-out prepare-widget-gl-context
@@ -28,6 +32,89 @@
                     (log-warning "could not load library ~a ~a"
                                  name vers)
                     #f)))
+
+;; ===================================================================================================
+;; Wayland GL
+
+(define egl-lib
+  (and wayland? (ffi-lib "libEGL" '("1" ""))))
+(define wayland-egl-lib
+  (and wayland? (ffi-lib "libwayland-egl" '("1" ""))))
+
+(define-ffi-definer define-egl egl-lib
+  #:default-make-fail make-not-available)
+(define-ffi-definer define-wayland-egl wayland-egl-lib
+  #:default-make-fail make-not-available)
+
+(define-gdk gdk_wayland_window_get_wl_surface
+  (_fun _GdkWindow -> _pointer)
+  #:fail (lambda () #f))
+
+(define-wayland-egl wl_egl_window_create
+  (_fun _pointer _int _int -> _pointer))
+(define-wayland-egl wl_egl_window_resize
+  (_fun _pointer _int _int _int _int -> _void))
+(define-wayland-egl wl_egl_window_destroy
+  (_fun _pointer -> _void))
+
+(define _EGLInt _int32)
+(define _EGLBoolean _bool) ; not _stdbool
+(define _EGLDisplay (_cpointer/null 'EGLDisplay))
+(define _EGLConfig (_cpointer/null 'EGLConfig))
+(define _EGLSurface (_cpointer/null 'EGLSurface))
+(define _EGLContext (_cpointer/null 'EGLContext))
+
+(define-egl eglGetProcAddress
+  (_fun _string -> _fpointer))
+(define eglGetPlatformDisplay-type
+  (_fun _EGLInt _pointer (_list i _EGLInt) -> _EGLDisplay))
+(define-egl eglGetPlatformDisplay eglGetPlatformDisplay-type)
+(define-egl eglInitialize
+  (_fun _pointer (_ptr o _int) (_ptr o _int) -> _EGLBoolean))
+(define-egl eglChooseConfig
+  (_fun _EGLDisplay (_list i _EGLInt) (c : (_ptr o _EGLConfig)) (_int = 1) (n : (_ptr o _EGLInt))
+	-> (r : _EGLBoolean)
+	-> (and r (= n 1) c)))
+(define eglCreatePlatformWindowSurface-type
+  (_fun _EGLDisplay _EGLConfig _pointer (_list i _int) -> _EGLSurface))
+(define-egl eglCreatePlatformWindowSurface
+  eglCreatePlatformWindowSurface-type)
+(define-egl eglBindAPI
+  (_fun _EGLInt -> _EGLBoolean))
+(define-egl eglCreateContext
+  (_fun _EGLDisplay _EGLConfig _EGLContext (_list i _EGLInt) -> _EGLContext))
+(define-egl eglMakeCurrent
+  (_fun _EGLDisplay _EGLSurface _EGLSurface _EGLContext -> _EGLBoolean))
+(define-egl eglSwapBuffers
+  (_fun _EGLDisplay _EGLSurface -> _EGLBoolean))
+
+(define-gdk gdk_wayland_display_get_wl_display (_fun _GdkDisplay -> _pointer)
+  #:make-fail make-not-available)
+(define-gdk gdk_wayland_display_get_wl_compositor (_fun _GdkDisplay -> _pointer)
+  #:make-fail make-not-available)
+
+(define EGL_OPENGL_API #x30A2)
+(define EGL_SURFACE_TYPE #x3033)
+(define EGL_WINDOW_BIT #x0004)
+(define EGL_RENDERABLE_TYPE #x3040)
+(define EGL_RENDER_BUFFER #x3086)
+(define EGL_BACK_BUFFER #x3084)
+(define EGL_SINGLE_BUFFER #x3085)
+(define EGL_OPENGL_BIT #x0008)
+(define EGL_OPENGL_ES2_BIT #x0004)
+(define EGL_DEPTH_SIZE #x3025)
+(define EGL_STENCIL_SIZE #x3026)
+(define EGL_RED_SIZE #x3024)
+(define EGL_GREEN_SIZE #x3023)
+(define EGL_BLUE_SIZE #x3022)
+(define EGL_ALPHA_SIZE #x3021)
+(define EGL_NONE #x3038)
+(define EGL_CONTEXT_CLIENT_VERSION #x3098)
+(define EGL_CONTEXT_MAJOR_VERSION #x3098)
+(define EGL_CONTEXT_MINOR_VERSION #x30FB)
+(define EGL_CONTEXT_OPENGL_PROFILE_MASK #x30FD)
+(define EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT #x00000001)
+(define EGL_PLATFORM_WAYLAND_KHR #x31D8)
 
 ;; ===================================================================================================
 ;; X11/GLX FFI
@@ -152,6 +239,9 @@
 
 (define lazy-get-glx-version
   (delay
+    (when wayland?
+      (error 'get-glx-version "can't use GLX on Wayland"))
+
     (define-values (worked? glx-major glx-minor)
       (glXQueryVersion (gdk_x11_display_get_xdisplay (gdk_display_get_default))))
     
@@ -198,7 +288,7 @@
     (define/public (get-gtk-drawable) drawable)
     (define/public (get-glx-pixmap) pixmap)
     
-    (define (get-drawable-xid)
+    (define/private (get-drawable-xid)
       (if pixmap pixmap (gdk_x11_drawable_get_xid drawable)))
     
     (define/override (draw:do-call-as-current t)
@@ -212,8 +302,54 @@
     
     (define/override (draw:do-swap-buffers)
       (glXSwapBuffers (gdk_x11_display_get_xdisplay display)
-                      (get-drawable-xid)))
+                      (get-drawable-xid))
+      (void))
+
+    (define/public (update-size x y w h)
+      (void))
+
+    (super-new)))
+
+;; ===================================================================================================
+;; Wrapper for EGLContext (Wayland)
+
+(define egl-context%
+  (class draw:gl-context%
+    (init-field context
+		display wl-display
+		surface wl-surface wl-parent-surface wl-subsurface
+		widget win)
+
+    (define/public (finalize)
+      (wl_egl_window_destroy win)
+      (wayland-subsurface-destroy wl-subsurface)
+      (wayland-surface-destroy wl-surface)
+      (void))
+    (define/override (get-handle) context)
     
+    (define/override (draw:do-call-as-current t)
+      (dynamic-wind
+	  (lambda ()
+	    (eglMakeCurrent display surface surface context))
+	  t
+	  (lambda ()
+	    (eglMakeCurrent display #f #f #f))))
+
+    (define callback #f)
+    (define callback-handle #f)
+ 
+    (define/override (draw:do-swap-buffers)
+      (unless callback
+	(eglSwapBuffers display surface)
+	(set! callback (lambda (data callback-h time)
+			 (set! callback #f)
+			 (gtk_widget_queue_draw widget)))
+	(set! callback-handle (wayland-register-surface-frame-callback wl-surface callback))
+	(wayland-surface-commit wl-surface)))
+
+    (define/public (update-size x y w h)
+      (wl_egl_window_resize win w h 0 0))
+
     (super-new)))
 
 ;; ===================================================================================================
@@ -350,89 +486,177 @@
 ;; (or/c #f _GtkWidget) _GdkDrawable gl-config% boolean? -> gl-context%
 ;;   where _GdkDrawable = (or/c _GtkWindow _GdkPixmap)
 (define (make-gtk-drawable-gl-context widget drawable conf wants-double?)
-  (define glx-version (get-glx-version))
-  
-  ;; If widget isn't #f, use its display and screen
-  (define display (gtk-maybe-widget-get-display widget))
-  (define screen (gtk-maybe-widget-get-screen widget))
-  
-  ;; Get the X objects wrapped by the GDK objects
-  (define xdisplay (gdk_x11_display_get_xdisplay display))
-  (define xscreen (gdk_x11_screen_get_screen_number screen))
-  
-  ;; Create an attribute list using the GL config
-  (define xattribs
-    (append
-     ;; Be aware: we may get double buffering even if we don't ask for it
-     (if wants-double?
-         (if (send conf get-double-buffered) (list GLX_DOUBLEBUFFER True) null)
-         null)
-     (if (send conf get-stereo) (list GLX_STEREO True) null)
-     ;; Finish out with standard GLX 1.3 attributes
-     (list
-      GLX_X_RENDERABLE True  ; yes, we want to use OpenGL to render today
-      GLX_DEPTH_SIZE (send conf get-depth-size)
-      GLX_STENCIL_SIZE (send conf get-stencil-size)
-      GLX_ACCUM_RED_SIZE (send conf get-accum-size)
-      GLX_ACCUM_GREEN_SIZE (send conf get-accum-size)
-      GLX_ACCUM_BLUE_SIZE (send conf get-accum-size)
-      GLX_ACCUM_ALPHA_SIZE (send conf get-accum-size)
-      ;; GLX_SAMPLES is handled below - GLX regards it as an absolute lower bound, which makes it
-      ;; too easy for user programs to fail to get a context
-      None)))
-  
-  (define multisample-size (send conf get-multisample-size))
-  
-  ;; Get all framebuffer configs for this display and screen that match the requested attributes,
-  ;; then sort them to put the best in front
-  ;; GLX already sorts them pretty well, so we just need a stable sort on multisamples at the moment
-  (define cfgs
-    (let* ([cfgs  (cvector->list (glXChooseFBConfig xdisplay xscreen xattribs))]
-           ;; Keep all configs with multisample size <= requested (i.e. make multisample-size an
-           ;; abolute upper bound)
-           [cfgs  (if (< glx-version #e1.4)
-                      cfgs
-                      (filter (λ (cfg)
-                                (define m (glx-get-fbconfig-attrib xdisplay cfg GLX_SAMPLES 0))
-                                (<= m multisample-size))
-                              cfgs))]
-           ;; Sort all configs by multisample size, decreasing
-           [cfgs  (if (< glx-version #e1.4)
-                      cfgs
-                      (sort cfgs >
-                            #:key (λ (cfg) (glx-get-fbconfig-attrib xdisplay cfg GLX_SAMPLES 0))
-                            #:cache-keys? #t))])
-      cfgs))
-  
   (cond
-    [(null? cfgs)  #f]
-    [else
-     ;; The framebuffer configs are sorted best-first, so choose the first
-     (define cfg (car cfgs))
-     (define share-gl
-       (let ([share-ctxt  (send conf get-share-context)])
-         (and share-ctxt (send share-ctxt get-handle))))
-     
-     ;; Get a GL context
-     (define gl
-       (if (and (>= glx-version #e1.4)
-                (not (send conf get-legacy?))
-                (force lazy-GLX_ARB_create_context?)
-                (force lazy-GLX_ARB_create_context_profile?))
-           ;; If the GLX version is high enough, legacy? is #f, and GLX has the right extensions,
-           ;; try to get a core-profile context
-           (glx-create-core-context xdisplay cfg share-gl)
-           ;; Otherwise use the old method
-           (glx-create-new-context xdisplay cfg share-gl)))
-     ;; The above will return a direct rendering context when it can
-     ;; If it doesn't, the context will be version 1.4 or lower, unless GLX is implemented with
-     ;; proprietary extensions (NVIDIA's drivers sometimes do this)
+   [wayland?
+    (gtk_widget_realize widget)
+    (define-values (width height)
+      (let ([a (widget-allocation widget)])
+	(values (GtkAllocation-width a)
+                (GtkAllocation-height a))))
+    (define-values (dx dy)
+      (gtk_widget_translate_coordinates widget (gtk_widget_get_toplevel widget) 0 0))
+    (define gdk-display (gdk_display_get_default))
+    (define wl-display (gdk_wayland_display_get_wl_display gdk-display))
+    (define wl-surface (gdk_wayland_window_get_wl_surface
+			(widget-window widget)))
+    (define wl-compositor (gdk_wayland_display_get_wl_compositor gdk-display))
+    (define wl-subcompositor (or (wayland-get-subcompositor wl-display)
+				 (error 'EGL "subcompositor failed")))
+    (define wl-surface/sub (or (wayland-compositor-create-surface wl-compositor)
+			       (error 'EGL "subsurface create failed")))
+    (define wl-subsurface (or (wayland-subcompositor-get-subsurface wl-subcompositor
+								    wl-surface/sub
+								    wl-surface)
+			      (error 'EGL "subsurface failed")))
 
-     (when (and widget (send conf get-sync-swap))
-       (glXSwapIntervalEXT xdisplay (gdk_x11_drawable_get_xid drawable) 1))
-     
-     ;; Now wrap the GLX context in a gl-context%
-     (cond
+    (let ([region (wayland-compositor-create-region wl-compositor)])
+      (wayland-surface-set-input-region wl-surface/sub region)
+      (wayland-region-destroy region))
+
+    (wayland-subsurface-set-position wl-subsurface (+ 1 dx) (+ 1 dy))
+    (wayland-subsurface-set-sync wl-subsurface #f)
+    (wayland-surface-commit wl-surface/sub)
+    (wayland-surface-commit wl-surface)
+    (define win (wl_egl_window_create wl-surface/sub width height))
+    (define eglGetPlatformDisplayEXT-addr
+      (eglGetProcAddress "eglGetPlatformDisplayEXT"))
+    (unless eglGetPlatformDisplayEXT-addr
+      (error 'EGL "could not get eglGetPlatformDisplayEXT"))
+    (define display ((cast eglGetPlatformDisplayEXT-addr _fpointer eglGetPlatformDisplay-type)
+		     EGL_PLATFORM_WAYLAND_KHR wl-display (list EGL_NONE)))
+    (unless (eglInitialize display)
+      (error 'EGL "initialization failed"))
+    (define accum-size (send conf get-accum-size))
+    (define attribs (list
+		     EGL_SURFACE_TYPE EGL_WINDOW_BIT
+		     EGL_RENDERABLE_TYPE EGL_OPENGL_BIT
+		     EGL_DEPTH_SIZE (send conf get-depth-size)
+		     EGL_STENCIL_SIZE (send conf get-stencil-size)
+		     EGL_RED_SIZE accum-size
+		     EGL_GREEN_SIZE accum-size
+		     EGL_BLUE_SIZE accum-size
+		     EGL_ALPHA_SIZE accum-size
+		     EGL_NONE))
+    (define config (or (eglChooseConfig display attribs)
+		       (error 'EGL "configuration failed")))
+    (unless (eglBindAPI EGL_OPENGL_API)
+      (error 'EGL "API bind failed"))
+    (define eglCreatePlatformWindowSurfaceEXT-addr
+      (eglGetProcAddress "eglCreatePlatformWindowSurfaceEXT"))
+    (unless eglCreatePlatformWindowSurfaceEXT-addr
+      (error 'EGL "could not get eglCreatePlatformWindowSurfaceEXP"))
+    (define surface (or ((cast eglCreatePlatformWindowSurfaceEXT-addr
+			       _fpointer eglCreatePlatformWindowSurface-type)
+			 display config win
+			 (list
+			  EGL_RENDER_BUFFER (if wants-double? EGL_BACK_BUFFER EGL_SINGLE_BUFFER)
+			  EGL_NONE))
+			(error 'EGL "surface failed")))
+    (define (make-context maj min)
+      (define context-attribs (list
+			       EGL_CONTEXT_MAJOR_VERSION maj
+			       EGL_CONTEXT_MINOR_VERSION min
+			       EGL_CONTEXT_OPENGL_PROFILE_MASK EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT
+			       EGL_NONE))
+      (eglCreateContext display config #f context-attribs))
+    (define context (or (for/or ([ver (if (send conf get-legacy?)
+					  '((2 1))
+					  core-gl-versions)])
+				(make-context (car ver) (cadr ver)))
+			(error 'EGL "context failed")))
+
+    (define ctxt (new egl-context% [context context]
+		      [display display] [wl-display wl-display]
+		      [surface surface] [wl-surface wl-surface/sub] [wl-parent-surface wl-surface]
+		      [wl-subsurface wl-subsurface]
+		      [widget widget]
+		      [win win]))
+    (register-finalizer ctxt (λ (ctxt) (send ctxt finalize)))
+    ctxt]
+   [else
+    (define glx-version (get-glx-version))
+
+    ;; If widget isn't #f, use its display and screen
+    (define display (gtk-maybe-widget-get-display widget))
+    (define screen (gtk-maybe-widget-get-screen widget))
+
+    ;; Get the X objects wrapped by the GDK objects
+    (define xdisplay (gdk_x11_display_get_xdisplay display))
+    (define xscreen (gdk_x11_screen_get_screen_number screen))
+
+    ;; Create an attribute list using the GL config
+    (define xattribs
+      (append
+       ;; Be aware: we may get double buffering even if we don't ask for it
+       (if wants-double?
+           (if (send conf get-double-buffered) (list GLX_DOUBLEBUFFER True) null)
+           null)
+       (if (send conf get-stereo) (list GLX_STEREO True) null)
+       ;; Finish out with standard GLX 1.3 attributes
+       (list
+	GLX_X_RENDERABLE True  ; yes, we want to use OpenGL to render today
+	GLX_DEPTH_SIZE (send conf get-depth-size)
+	GLX_STENCIL_SIZE (send conf get-stencil-size)
+	GLX_ACCUM_RED_SIZE (send conf get-accum-size)
+	GLX_ACCUM_GREEN_SIZE (send conf get-accum-size)
+	GLX_ACCUM_BLUE_SIZE (send conf get-accum-size)
+	GLX_ACCUM_ALPHA_SIZE (send conf get-accum-size)
+	;; GLX_SAMPLES is handled below - GLX regards it as an absolute lower bound, which makes it
+	;; too easy for user programs to fail to get a context
+	None)))
+
+    (define multisample-size (send conf get-multisample-size))
+
+    ;; Get all framebuffer configs for this display and screen that match the requested attributes,
+    ;; then sort them to put the best in front
+    ;; GLX already sorts them pretty well, so we just need a stable sort on multisamples at the moment
+    (define cfgs
+      (let* ([cfgs  (cvector->list (glXChooseFBConfig xdisplay xscreen xattribs))]
+             ;; Keep all configs with multisample size <= requested (i.e. make multisample-size an
+             ;; abolute upper bound)
+             [cfgs  (if (< glx-version #e1.4)
+			cfgs
+			(filter (λ (cfg)
+                                  (define m (glx-get-fbconfig-attrib xdisplay cfg GLX_SAMPLES 0))
+                                  (<= m multisample-size))
+				cfgs))]
+             ;; Sort all configs by multisample size, decreasing
+             [cfgs  (if (< glx-version #e1.4)
+			cfgs
+			(sort cfgs >
+                              #:key (λ (cfg) (glx-get-fbconfig-attrib xdisplay cfg GLX_SAMPLES 0))
+                              #:cache-keys? #t))])
+	cfgs))
+ 
+    (cond
+     [(null? cfgs)  #f]
+     [else
+      ;; The framebuffer configs are sorted best-first, so choose the first
+      (define cfg (car cfgs))
+      (define share-gl
+	(let ([share-ctxt  (send conf get-share-context)])
+          (and share-ctxt (send share-ctxt get-handle))))
+
+      ;; Get a GL context
+      (define gl
+	(if (and (>= glx-version #e1.4)
+                 (not (send conf get-legacy?))
+                 (force lazy-GLX_ARB_create_context?)
+                 (force lazy-GLX_ARB_create_context_profile?))
+            ;; If the GLX version is high enough, legacy? is #f, and GLX has the right extensions,
+            ;; try to get a core-profile context
+            (glx-create-core-context xdisplay cfg share-gl)
+            ;; Otherwise use the old method
+            (glx-create-new-context xdisplay cfg share-gl)))
+      ;; The above will return a direct rendering context when it can
+      ;; If it doesn't, the context will be version 1.4 or lower, unless GLX is implemented with
+      ;; proprietary extensions (NVIDIA's drivers sometimes do this)
+
+      (when (and widget (send conf get-sync-swap))
+	(glXSwapIntervalEXT xdisplay (gdk_x11_drawable_get_xid drawable) 1))
+
+      ;; Now wrap the GLX context in a gl-context%
+      (cond
        [gl
         ;; If there's no widget, this is for a pixmap, so get the stupid GLX wrapper for it or
         ;; indirect rendering may crash on some systems (notably mine)
@@ -460,15 +684,17 @@
            (unless (and gtk3? (not widget)) (g_object_unref drawable))
            (g_object_unref display)))
         ctxt]
-       [else  #f])]))
+       [else  #f])])]))
 
 (define (make-gtk-widget-gl-context widget conf)
-  (atomically
-   (make-gtk-drawable-gl-context widget (widget-window widget) conf #t)))
+  (call-as-atomic
+   (lambda ()
+     (make-gtk-drawable-gl-context widget (widget-window widget) conf #t))))
 
 (define (make-gtk-pixmap-gl-context pixmap conf)
-  (atomically
-   (make-gtk-drawable-gl-context #f pixmap conf #f)))
+  (call-as-atomic
+   (lambda ()
+     (make-gtk-drawable-gl-context #f pixmap conf #f))))
 
 ;; ===================================================================================================
 

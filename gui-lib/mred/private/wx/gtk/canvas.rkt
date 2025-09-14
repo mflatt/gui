@@ -79,6 +79,7 @@
 (define-gtk gtk_vscrollbar_new (_fun _pointer -> _GtkWidget))
 
 (define-gtk gtk_widget_set_double_buffered (_fun _GtkWidget _gboolean -> _void))
+(define-gtk gtk_widget_set_app_paintable (_fun _GtkWidget _gboolean -> _void))
 
 (define _GtkAdjustment _GtkWidget) ; no, actually a GtkObject
 (define-gtk gtk_adjustment_new (_fun _double* _double* _double* _double* _double* _double* -> _GtkAdjustment))
@@ -449,6 +450,7 @@
        (when (and (is-auto-scroll?)
                   (not (is-panel?)))
          (reset-auto-scroll))
+       (when dc (send dc update-canvas-size x y w h))
        (on-size))
      
      (set! dc (new dc% [canvas this] [transparentish? transparentish?]))
