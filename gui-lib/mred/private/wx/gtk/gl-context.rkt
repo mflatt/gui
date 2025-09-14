@@ -80,10 +80,12 @@
 (define EGL_SURFACE_TYPE #x3033)
 (define EGL_WINDOW_BIT #x0004)
 (define EGL_RENDERABLE_TYPE #x3040)
+(define EGL_OPENGL_BIT #x0008)
 (define EGL_OPENGL_ES2_BIT #x0004)
 (define EGL_RED_SIZE #x3024)
 (define EGL_GREEN_SIZE #x3023)
 (define EGL_BLUE_SIZE #x3022)
+(define EGL_ALPHA_SIZE #x3021)
 (define EGL_NONE #x3038)
 (define EGL_CONTEXT_CLIENT_VERSION #x3098)
 (define EGL_PLATFORM_WAYLAND_KHR #x31D8)
@@ -464,6 +466,7 @@
 		     EGL_RED_SIZE 8
 		     EGL_GREEN_SIZE 8
 		     EGL_BLUE_SIZE 8
+		     EGL_ALPHA_SIZE 8
 		     EGL_NONE))
     (define config (or (eglChooseConfig display attribs)
 		       (error 'EGL "configuration failed")))
