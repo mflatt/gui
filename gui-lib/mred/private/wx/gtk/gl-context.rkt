@@ -12,6 +12,7 @@
          "../../lock.rkt"
          "types.rkt"
          "utils.rkt"
+         "widget.rkt"
          "window.rkt"
          "x11.rkt"
 	 "queue.rkt"
@@ -304,7 +305,7 @@
 
 (define egl-context%
   (class draw:gl-context%
-    (init-field context display surface win)
+    (init-field context display wl-display surface wl-surface wl-parent-surface widget win)
     
     (define/public (finalize)
       (void))
@@ -314,15 +315,22 @@
       (dynamic-wind
 	  (lambda ()
 	    (eglMakeCurrent display surface surface context))
-	  (lambda ()
-	    (t))
+	  t
 	  (lambda ()
 	    (eglMakeCurrent display #f #f #f))))
-    
+					       
+    (define waiting? #f)
+    (define (callback data callback time)
+      (set! waiting? #f)
+      (gtk_widget_queue_draw widget))
+    (define callback-handle #f)
+ 
     (define/override (draw:do-swap-buffers)
-      (void)
-      #;
-      (eglSwapBuffers display surface))
+      (unless waiting?
+	(eglSwapBuffers display surface)
+	(set! callback-handle (wayland-register-surface-frame-callback wl-surface callback))
+	(wayland-surface-commit wl-surface)
+	(set! waiting? #t)))
 
     (define/public (update-size x y w h)
       (wl_egl_window_resize win w h 0 0))
@@ -465,8 +473,11 @@
 (define (make-gtk-drawable-gl-context widget drawable conf wants-double?)
   (cond
    [wayland?
-    (log-error "here")
     (gtk_widget_realize widget)
+    (define-values (width height)
+      (let ([a (widget-allocation widget)])
+	(values (GtkAllocation-width a)
+                (GtkAllocation-height a))))
     (log-error "display")
     (define gdk-display (gdk_display_get_default))
     (define wl-display (gdk_wayland_display_get_wl_display gdk-display))
@@ -483,13 +494,11 @@
 								    wl-surface/sub
 								    wl-surface)
 			      (error 'EGL "subsurface failed")))
-    (wayland-subsurface-set-position wl-subsurface 0 0)
+    (wayland-subsurface-set-position wl-subsurface 26 60) ;; FIXME
     (wayland-subsurface-set-sync wl-subsurface #f)
+    (wayland-surface-commit wl-surface/sub)
+    (wayland-surface-commit wl-surface)
     (log-error "subcom")
-    (define-values (width height)
-      (let ([a (widget-allocation widget)])
-	(values (GtkAllocation-width a)
-                (GtkAllocation-height a))))
     (define win (wl_egl_window_create wl-surface/sub width height))
     (define eglGetPlatformDisplayEXT-addr
       (eglGetProcAddress "eglGetPlatformDisplayEXT"))
@@ -532,7 +541,10 @@
 				(make-context (car ver) (cadr ver)))
 			(error 'EGL "context failed")))
 
-    (define ctxt (new egl-context% [context context] [display display] [surface surface]
+    (define ctxt (new egl-context% [context context]
+		      [display display] [wl-display wl-display]
+		      [surface surface] [wl-surface wl-surface/sub] [wl-parent-surface wl-surface]
+		      [widget widget]
 		      [win win]))
     (register-finalizer ctxt (λ (ctxt) (send ctxt finalize)))
     (log-error "context")
