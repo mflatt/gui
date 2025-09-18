@@ -14,7 +14,8 @@
          "utils.rkt"
          "window.rkt"
          "x11.rkt"
-	 "queue.rkt")
+	 "queue.rkt"
+	 "wayland.rkt")
 
 (provide
  (protect-out prepare-widget-gl-context
@@ -57,16 +58,23 @@
 (define _EGLSurface (_cpointer/null 'EGLSurface))
 (define _EGLContext (_cpointer/null 'EGLContext))
 
-(define-egl eglGetPlatformDisplay
+(define-egl eglGetProcAddress
+  (_fun _string -> _fpointer))
+(define eglGetPlatformDisplay-type
   (_fun _EGLInt _pointer (_list i _EGLInt) -> _EGLDisplay))
+(define-egl eglGetPlatformDisplay eglGetPlatformDisplay-type) 
 (define-egl eglInitialize
   (_fun _pointer (_ptr o _int) (_ptr o _int) -> _EGLBoolean))
 (define-egl eglChooseConfig
   (_fun _EGLDisplay (_list i _EGLInt) (c : (_ptr o _EGLConfig)) (_int = 1) (n : (_ptr o _EGLInt))
 	-> (r : _EGLBoolean)
 	-> (and r (= n 1) c)))
-(define-egl eglCreatePlatformWindowSurface
+(define eglCreatePlatformWindowSurface-type
   (_fun _EGLDisplay _EGLConfig _pointer _pointer -> _EGLSurface))
+(define-egl eglCreatePlatformWindowSurface
+  eglCreatePlatformWindowSurface-type)
+(define-egl eglBindAPI
+  (_fun _EGLInt -> _EGLBoolean))
 (define-egl eglCreateContext
   (_fun _EGLDisplay _EGLConfig _EGLContext (_list i _EGLInt) -> _EGLContext))
 (define-egl eglMakeCurrent
@@ -76,7 +84,10 @@
 
 (define-gdk gdk_wayland_display_get_wl_display (_fun _GdkDisplay -> _pointer)
   #:make-fail make-not-available)
+(define-gdk gdk_wayland_display_get_wl_compositor (_fun _GdkDisplay -> _pointer)
+  #:make-fail make-not-available)
 
+(define EGL_OPENGL_API #x30A2)
 (define EGL_SURFACE_TYPE #x3033)
 (define EGL_WINDOW_BIT #x0004)
 (define EGL_RENDERABLE_TYPE #x3040)
@@ -88,6 +99,10 @@
 (define EGL_ALPHA_SIZE #x3021)
 (define EGL_NONE #x3038)
 (define EGL_CONTEXT_CLIENT_VERSION #x3098)
+(define EGL_CONTEXT_MAJOR_VERSION #x3098)
+(define EGL_CONTEXT_MINOR_VERSION #x30FB)
+(define EGL_CONTEXT_OPENGL_PROFILE_MASK #x30FD)
+(define EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT #x00000001)
 (define EGL_PLATFORM_WAYLAND_KHR #x31D8)
 
 ;; ===================================================================================================
@@ -447,22 +462,37 @@
 (define (make-gtk-drawable-gl-context widget drawable conf wants-double?)
   (cond
    [wayland?
+    (log-error "here")
     (gtk_widget_realize widget)
-    (define wl-display (gdk_wayland_display_get_wl_display
-			(gdk_display_get_default)))
+    (log-error "display")
+    (define gdk-display (gdk_display_get_default))
+    (define wl-display (gdk_wayland_display_get_wl_display gdk-display))
+    (define wl-compositor (gdk_wayland_display_get_wl_compositor gdk-display))
+    (define wl-subcompositor (or (wayland-get-subcompositor wl-display)
+				 (error 'EGL "subcompositor failed")))
+    (log-error "surface")
     (define wl-surface (gdk_wayland_window_get_wl_surface
 			(widget-window widget)))
+    (define wl-surface/sub (wayland-compositor-create-surface wl-compositor))
+    (define wl-subsurface (wayland-subcompositor-get-subsurface wl-subcompositor
+								wl-surface
+								wl-surface/sub))
     (define-values (width height)
       (let ([a (widget-allocation widget)])
 	(values (GtkAllocation-width a)
                 (GtkAllocation-height a))))
     (define win (wl_egl_window_create wl-surface width height))
-    (define display (eglGetPlatformDisplay EGL_PLATFORM_WAYLAND_KHR wl-display null))
+    (define eglGetPlatformDisplayEXT-addr
+      (eglGetProcAddress "eglGetPlatformDisplayEXT"))
+    (unless eglGetPlatformDisplayEXT-addr
+      (error 'EGL "could not get eglGetPlatformDisplayEXT"))
+    (define display ((cast eglGetPlatformDisplayEXT-addr _fpointer eglGetPlatformDisplay-type)
+		     EGL_PLATFORM_WAYLAND_KHR wl-display (list EGL_NONE)))
     (unless (eglInitialize display)
       (error 'EGL "initialization failed"))
     (define attribs (list
 		     EGL_SURFACE_TYPE EGL_WINDOW_BIT
-		     EGL_RENDERABLE_TYPE EGL_OPENGL_ES2_BIT
+		     EGL_RENDERABLE_TYPE EGL_OPENGL_BIT
 		     EGL_RED_SIZE 8
 		     EGL_GREEN_SIZE 8
 		     EGL_BLUE_SIZE 8
@@ -470,13 +500,27 @@
 		     EGL_NONE))
     (define config (or (eglChooseConfig display attribs)
 		       (error 'EGL "configuration failed")))
-    (define surface (or (eglCreatePlatformWindowSurface display config win #f)
+    (define eglCreatePlatformWindowSurfaceEXT-addr
+      (eglGetProcAddress "eglCreatePlatformWindowSurfaceEXT"))
+    (unless eglCreatePlatformWindowSurfaceEXT-addr
+      (error 'EGL "could not get eglCreatePlatformWindowSurfaceEXP"))    
+    (define surface (or ((cast eglCreatePlatformWindowSurfaceEXT-addr
+			       _fpointer eglCreatePlatformWindowSurface-type)
+			 display config win #f)
 			(error 'EGL "surface failed")))
-    (define context-attribs (list
-			     EGL_CONTEXT_CLIENT_VERSION 2
-			     EGL_NONE
-			     EGL_NONE))
-    (define context (or (eglCreateContext display config #f context-attribs)
+    (unless (eglBindAPI EGL_OPENGL_API)
+      (error 'EGL "API bind failed"))
+    (define (make-context maj min)
+      (define context-attribs (list
+			       EGL_CONTEXT_MAJOR_VERSION maj
+			       EGL_CONTEXT_MINOR_VERSION min
+			       EGL_CONTEXT_OPENGL_PROFILE_MASK EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT
+			       EGL_NONE))
+      (eglCreateContext display config #f context-attribs))
+    (define context (or (for/or ([ver (if (send conf get-legacy?)
+					  '((2 1))
+					  core-gl-versions)])
+				(make-context (car ver) (cadr ver)))
 			(error 'EGL "context failed")))
 
     (define ctxt (new egl-context% [context context] [display display] [surface surface]
