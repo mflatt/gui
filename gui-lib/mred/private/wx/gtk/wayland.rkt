@@ -143,17 +143,21 @@
 (define (remove-callback data registry id)
   (void))
 
+(define cached-subcompositor #f)
+
 (define (wayland-get-subcompositor display)
-  (define registry (wl_proxy_marshal_constructor/wl_display_get_registry
-		    display
-		    WL_DISPLAY_GET_REGISTRY
-		    wl_registry_interface
-		    #f))
-  (define l (make-wl_registry_listener handle-callback remove-callback))
-  (wl_proxy_add_listener registry l #f)
-  (wl_display_roundtrip display)
-  (void/reference-sink l)
-  subcompositor)
+  (unless cached-subcompositor
+    (define registry (wl_proxy_marshal_constructor/wl_display_get_registry
+		      display
+		      WL_DISPLAY_GET_REGISTRY
+		      wl_registry_interface
+		      #f))
+    (define l (make-wl_registry_listener handle-callback remove-callback))
+    (wl_proxy_add_listener registry l #f)
+    (wl_display_roundtrip display)
+    (void/reference-sink l)
+    (set! cached-subcompositor subcompositor))
+  cached-subcompositor)
 
 (define (wayland-compositor-create-surface compositor)
   (wl_proxy_marshal_flags/wl_compositor_create_surface

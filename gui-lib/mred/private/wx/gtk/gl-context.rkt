@@ -71,7 +71,7 @@
 	-> (r : _EGLBoolean)
 	-> (and r (= n 1) c)))
 (define eglCreatePlatformWindowSurface-type
-  (_fun _EGLDisplay _EGLConfig _pointer _pointer -> _EGLSurface))
+  (_fun _EGLDisplay _EGLConfig _pointer (_list i _int) -> _EGLSurface))
 (define-egl eglCreatePlatformWindowSurface
   eglCreatePlatformWindowSurface-type)
 (define-egl eglBindAPI
@@ -92,8 +92,13 @@
 (define EGL_SURFACE_TYPE #x3033)
 (define EGL_WINDOW_BIT #x0004)
 (define EGL_RENDERABLE_TYPE #x3040)
+(define EGL_RENDER_BUFFER #x3086)
+(define EGL_BACK_BUFFER #x3084)
+(define EGL_SINGLE_BUFFER #x3085)
 (define EGL_OPENGL_BIT #x0008)
 (define EGL_OPENGL_ES2_BIT #x0004)
+(define EGL_DEPTH_SIZE #x3025)
+(define EGL_STENCIL_SIZE #x3026)
 (define EGL_RED_SIZE #x3024)
 (define EGL_GREEN_SIZE #x3023)
 (define EGL_BLUE_SIZE #x3022)
@@ -333,7 +338,9 @@
 	(set! waiting? #t)))
 
     (define/public (update-size x y w h)
-      (wl_egl_window_resize win w h 0 0))
+      (define-values (dx dy)
+	(gtk_widget_translate_coordinates widget (gtk_widget_get_toplevel widget) 0 0))
+      (wl_egl_window_resize win w h dx dy))
 
     (super-new)))
 
@@ -478,7 +485,8 @@
       (let ([a (widget-allocation widget)])
 	(values (GtkAllocation-width a)
                 (GtkAllocation-height a))))
-    (log-error "display")
+    (define-values (dx dy)
+      (gtk_widget_translate_coordinates widget (gtk_widget_get_toplevel widget) 0 0))
     (define gdk-display (gdk_display_get_default))
     (define wl-display (gdk_wayland_display_get_wl_display gdk-display))
     (define wl-surface (gdk_wayland_window_get_wl_surface
@@ -486,19 +494,17 @@
     (define wl-compositor (gdk_wayland_display_get_wl_compositor gdk-display))
     (define wl-subcompositor (or (wayland-get-subcompositor wl-display)
 				 (error 'EGL "subcompositor failed")))
-    (log-error "surface")
     (define wl-surface/sub (or (wayland-compositor-create-surface wl-compositor)
 			       (error 'EGL "subsurface create failed")))
-    (log-error "subsurface")
     (define wl-subsurface (or (wayland-subcompositor-get-subsurface wl-subcompositor
 								    wl-surface/sub
 								    wl-surface)
 			      (error 'EGL "subsurface failed")))
-    (wayland-subsurface-set-position wl-subsurface 26 60) ;; FIXME
+    
+    (wayland-subsurface-set-position wl-subsurface dx dy)
     (wayland-subsurface-set-sync wl-subsurface #f)
     (wayland-surface-commit wl-surface/sub)
     (wayland-surface-commit wl-surface)
-    (log-error "subcom")
     (define win (wl_egl_window_create wl-surface/sub width height))
     (define eglGetPlatformDisplayEXT-addr
       (eglGetProcAddress "eglGetPlatformDisplayEXT"))
@@ -508,13 +514,16 @@
 		     EGL_PLATFORM_WAYLAND_KHR wl-display (list EGL_NONE)))
     (unless (eglInitialize display)
       (error 'EGL "initialization failed"))
+    (define accum-size (send conf get-accum-size))
     (define attribs (list
 		     EGL_SURFACE_TYPE EGL_WINDOW_BIT
 		     EGL_RENDERABLE_TYPE EGL_OPENGL_BIT
-		     EGL_RED_SIZE 8
-		     EGL_GREEN_SIZE 8
-		     EGL_BLUE_SIZE 8
-		     EGL_ALPHA_SIZE 8
+		     EGL_DEPTH_SIZE (send conf get-depth-size)
+		     EGL_STENCIL_SIZE (send conf get-stencil-size)
+		     EGL_RED_SIZE accum-size
+		     EGL_GREEN_SIZE accum-size
+		     EGL_BLUE_SIZE accum-size
+		     EGL_ALPHA_SIZE accum-size
 		     EGL_NONE))
     (define config (or (eglChooseConfig display attribs)
 		       (error 'EGL "configuration failed")))
@@ -526,7 +535,10 @@
       (error 'EGL "could not get eglCreatePlatformWindowSurfaceEXP"))    
     (define surface (or ((cast eglCreatePlatformWindowSurfaceEXT-addr
 			       _fpointer eglCreatePlatformWindowSurface-type)
-			 display config win #f)
+			 display config win
+			 (list
+			  EGL_RENDER_BUFFER (if wants-double? EGL_BACK_BUFFER EGL_SINGLE_BUFFER)
+			  EGL_NONE))
 			(error 'EGL "surface failed")))
     (define (make-context maj min)
       (define context-attribs (list
@@ -547,7 +559,6 @@
 		      [widget widget]
 		      [win win]))
     (register-finalizer ctxt (λ (ctxt) (send ctxt finalize)))
-    (log-error "context")
     ctxt]
    [else
     (define glx-version (get-glx-version))
