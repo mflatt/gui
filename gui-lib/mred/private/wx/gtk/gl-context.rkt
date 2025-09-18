@@ -37,20 +37,25 @@
 ;; Wayland GL
 
 (define egl-lib
-  (ffi-lib "libEGL" '("1" "")))
+  (and wayland? (ffi-lib "libEGL" '("1" ""))))
 (define wayland-egl-lib
-  (ffi-lib "libwayland-egl" '("1" "")))
+  (and wayland? (ffi-lib "libwayland-egl" '("1" ""))))
 
-(define-ffi-definer define-egl egl-lib)
-(define-ffi-definer define-wayland-egl wayland-egl-lib)
+(define-ffi-definer define-egl egl-lib
+  #:default-make-fail make-not-available)
+(define-ffi-definer define-wayland-egl wayland-egl-lib
+  #:default-make-fail make-not-available)
 
 (define-gdk gdk_wayland_window_get_wl_surface
-  (_fun _GdkWindow -> _pointer))
+  (_fun _GdkWindow -> _pointer)
+  #:fail (lambda () #f))
 
 (define-wayland-egl wl_egl_window_create
   (_fun _pointer _int _int -> _pointer))
 (define-wayland-egl wl_egl_window_resize
   (_fun _pointer _int _int _int _int -> _void))
+(define-wayland-egl wl_egl_window_destroy
+  (_fun _pointer -> _void))
 
 (define _EGLInt _int32)
 (define _EGLBoolean _bool) ; not _stdbool
@@ -283,7 +288,7 @@
     (define/public (get-gtk-drawable) drawable)
     (define/public (get-glx-pixmap) pixmap)
     
-    (define (get-drawable-xid)
+    (define/private (get-drawable-xid)
       (if pixmap pixmap (gdk_x11_drawable_get_xid drawable)))
     
     (define/override (draw:do-call-as-current t)
@@ -306,13 +311,21 @@
     (super-new)))
 
 ;; ===================================================================================================
-;; Wrapper for the EGLContext
+;; Wrapper for EGLContext (Wayland)
 
 (define egl-context%
   (class draw:gl-context%
-    (init-field context display wl-display surface wl-surface wl-parent-surface widget win)
+    (init-field context 
+		display wl-display 
+		surface wl-surface wl-parent-surface wl-subsurface
+		widget win)
+
+    (define caanry (make-will-executor))
     
     (define/public (finalize)
+      (wl_egl_window_destroy win)
+      (wayland-subsurface-destroy wl-subsurface)
+      (wayland-surface-destroy wl-surface)
       (void))
     (define/override (get-handle) context)
     
@@ -325,22 +338,22 @@
 	    (eglMakeCurrent display #f #f #f))))
 					       
     (define waiting? #f)
-    (define (callback data callback time)
-      (set! waiting? #f)
-      (gtk_widget_queue_draw widget))
+    (define callback #f)
     (define callback-handle #f)
  
     (define/override (draw:do-swap-buffers)
       (unless waiting?
 	(eglSwapBuffers display surface)
+	(set! callback (lambda (data callback time)
+			 (set! waiting? #f)
+			 (set! callback #f)
+			 (gtk_widget_queue_draw widget)))
 	(set! callback-handle (wayland-register-surface-frame-callback wl-surface callback))
 	(wayland-surface-commit wl-surface)
 	(set! waiting? #t)))
 
     (define/public (update-size x y w h)
-      (define-values (dx dy)
-	(gtk_widget_translate_coordinates widget (gtk_widget_get_toplevel widget) 0 0))
-      (wl_egl_window_resize win w h dx dy))
+      (wl_egl_window_resize win w h 0 0))
 
     (super-new)))
 
@@ -500,8 +513,12 @@
 								    wl-surface/sub
 								    wl-surface)
 			      (error 'EGL "subsurface failed")))
-    
-    (wayland-subsurface-set-position wl-subsurface dx dy)
+
+    (let ([region (wayland-compositor-create-region wl-compositor)])
+      (wayland-surface-set-input-region wl-surface/sub region)
+      (wayland-region-destroy region))
+
+    (wayland-subsurface-set-position wl-subsurface (+ 1 dx) (+ 1 dy))
     (wayland-subsurface-set-sync wl-subsurface #f)
     (wayland-surface-commit wl-surface/sub)
     (wayland-surface-commit wl-surface)
@@ -556,6 +573,7 @@
     (define ctxt (new egl-context% [context context]
 		      [display display] [wl-display wl-display]
 		      [surface surface] [wl-surface wl-surface/sub] [wl-parent-surface wl-surface]
+		      [wl-subsurface wl-subsurface]
 		      [widget widget]
 		      [win win]))
     (register-finalizer ctxt (λ (ctxt) (send ctxt finalize)))
