@@ -314,11 +314,14 @@
       (dynamic-wind
 	  (lambda ()
 	    (eglMakeCurrent display surface surface context))
-	  t
+	  (lambda ()
+	    (t))
 	  (lambda ()
 	    (eglMakeCurrent display #f #f #f))))
     
     (define/override (draw:do-swap-buffers)
+      (void)
+      #;
       (eglSwapBuffers display surface))
 
     (define/public (update-size x y w h)
@@ -467,21 +470,27 @@
     (log-error "display")
     (define gdk-display (gdk_display_get_default))
     (define wl-display (gdk_wayland_display_get_wl_display gdk-display))
+    (define wl-surface (gdk_wayland_window_get_wl_surface
+			(widget-window widget)))
     (define wl-compositor (gdk_wayland_display_get_wl_compositor gdk-display))
     (define wl-subcompositor (or (wayland-get-subcompositor wl-display)
 				 (error 'EGL "subcompositor failed")))
     (log-error "surface")
-    (define wl-surface (gdk_wayland_window_get_wl_surface
-			(widget-window widget)))
-    (define wl-surface/sub (wayland-compositor-create-surface wl-compositor))
-    (define wl-subsurface (wayland-subcompositor-get-subsurface wl-subcompositor
-								wl-surface
-								wl-surface/sub))
+    (define wl-surface/sub (or (wayland-compositor-create-surface wl-compositor)
+			       (error 'EGL "subsurface create failed")))
+    (log-error "subsurface")
+    (define wl-subsurface (or (wayland-subcompositor-get-subsurface wl-subcompositor
+								    wl-surface/sub
+								    wl-surface)
+			      (error 'EGL "subsurface failed")))
+    (wayland-subsurface-set-position wl-subsurface 0 0)
+    (wayland-subsurface-set-sync wl-subsurface #f)
+    (log-error "subcom")
     (define-values (width height)
       (let ([a (widget-allocation widget)])
 	(values (GtkAllocation-width a)
                 (GtkAllocation-height a))))
-    (define win (wl_egl_window_create wl-surface width height))
+    (define win (wl_egl_window_create wl-surface/sub width height))
     (define eglGetPlatformDisplayEXT-addr
       (eglGetProcAddress "eglGetPlatformDisplayEXT"))
     (unless eglGetPlatformDisplayEXT-addr
@@ -500,6 +509,8 @@
 		     EGL_NONE))
     (define config (or (eglChooseConfig display attribs)
 		       (error 'EGL "configuration failed")))
+    (unless (eglBindAPI EGL_OPENGL_API)
+      (error 'EGL "API bind failed"))
     (define eglCreatePlatformWindowSurfaceEXT-addr
       (eglGetProcAddress "eglCreatePlatformWindowSurfaceEXT"))
     (unless eglCreatePlatformWindowSurfaceEXT-addr
@@ -508,8 +519,6 @@
 			       _fpointer eglCreatePlatformWindowSurface-type)
 			 display config win #f)
 			(error 'EGL "surface failed")))
-    (unless (eglBindAPI EGL_OPENGL_API)
-      (error 'EGL "API bind failed"))
     (define (make-context maj min)
       (define context-attribs (list
 			       EGL_CONTEXT_MAJOR_VERSION maj
@@ -526,6 +535,7 @@
     (define ctxt (new egl-context% [context context] [display display] [surface surface]
 		      [win win]))
     (register-finalizer ctxt (λ (ctxt) (send ctxt finalize)))
+    (log-error "context")
     ctxt]
    [else
     (define glx-version (get-glx-version))

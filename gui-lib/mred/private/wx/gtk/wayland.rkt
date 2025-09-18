@@ -6,7 +6,10 @@
 
 (provide wayland-get-subcompositor
 	 wayland-compositor-create-surface
-	 wayland-subcompositor-get-subsurface)
+	 wayland-subcompositor-get-subsurface
+	 wayland-subsurface-set-position
+	 wayland-subsurface-set-sync
+	 wayland-roundtrip)
 
 (define wayland-lib
   (ffi-lib "libwayland-client" '("1" "")))
@@ -31,6 +34,9 @@
 (define WL_REGISTRY_BIND 0)
 (define WL_COMPOSITOR_CREATE_SURFACE 0)
 (define WL_SUBCOMPOSITOR_GET_SUBSURFACE 1)
+(define WL_SUBSURFACE_SET_POSITION 1)
+(define WL_SUBSURFACE_SET_SYNC 4)
+(define WL_SUBSURFACE_SET_DESYNC 5)
 
 (define _registry (_cpointer/null 'wl_registry))
 
@@ -66,6 +72,28 @@
 	_pointer
 	_pointer _pointer
 	-> _pointer)
+  #:c-id wl_proxy_marshal_flags)
+(define-wayland wl_proxy_marshal_flags/wl_subcompositor_set_position
+  (_fun #:varargs-after 5
+	_pointer _uint32 _pointer _uint32
+	_uint32
+	_int32 _int32
+	-> _pointer)
+  #:c-id wl_proxy_marshal_flags)
+(define-wayland wl_proxy_marshal_flags/wl_subsurface_set_position
+  (_fun #:varargs-after 5
+	_pointer _uint32 _pointer _uint32
+	_uint32
+	_int32 _int32
+	-> _pointer
+	-> (void))
+  #:c-id wl_proxy_marshal_flags)
+(define-wayland wl_proxy_marshal_flags/wl_subsurface_set_sync
+  (_fun #:varargs-after 5
+	_pointer _uint32 _pointer _uint32
+	_uint32
+	-> _pointer
+	-> (void))
   #:c-id wl_proxy_marshal_flags)
 (define-wayland wl_proxy_add_listener
   (_fun _registry _wl_registry_listener-pointer _pointer -> _void))
@@ -116,3 +144,21 @@
    wl_subsurface_interface (wl_proxy_get_version subcompositor)
    0
    #f child parent))
+
+(define (wayland-subsurface-set-position subsurface x y)
+  (wl_proxy_marshal_flags/wl_subsurface_set_position
+   subsurface
+   WL_SUBSURFACE_SET_POSITION
+   wl_subsurface_interface (wl_proxy_get_version subsurface)
+   0
+   x y))
+
+(define (wayland-subsurface-set-sync subsurface on?)
+  (wl_proxy_marshal_flags/wl_subsurface_set_sync
+   subsurface
+   (if on? WL_SUBSURFACE_SET_SYNC WL_SUBSURFACE_SET_DESYNC)
+   wl_subsurface_interface (wl_proxy_get_version subsurface)
+   0))
+
+(define (wayland-roundtrip display)
+  (wl_display_roundtrip display))
