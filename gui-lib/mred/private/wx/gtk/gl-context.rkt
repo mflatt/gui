@@ -27,7 +27,8 @@
               get-gdk-pixmap
               install-gl-context
 	      gl-update-size
-	      gl-to-cairo-sync))
+	      gl-to-cairo-sync
+	      gl-reset-context))
 
 (define (ffi-lib/complaint-on-failure name vers)
   (ffi-lib name vers
@@ -38,7 +39,8 @@
 
 (define-local-member-name
   gl-update-size
-  gl-to-cairo-sync)
+  gl-to-cairo-sync
+  gl-reset-context)
 
 ;; ===================================================================================================
 ;; Wayland GL
@@ -318,6 +320,8 @@
     
     (define/private (get-drawable-xid)
       (if pixmap pixmap (gdk_x11_drawable_get_xid drawable)))
+
+    (define/public (gl-reset-context mapped?) (void))
     
     (define/override (draw:do-call-as-current t)
       (define xdisplay (gdk_x11_display_get_xdisplay display))
@@ -351,16 +355,34 @@
 		surface [wl-surface #f] [wl-parent-surface #f] [wl-subsurface #f]
 		[widget #f] [win #f]
 		[cairo-surface #f] [texture-sync #f]
-		[bm #f])
+		[bm #f]
+		[create #f])
 
-    (define/public (egl-finalize)
-      (cond
-       [wl-subsurface
-	(wayland-subsurface-destroy wl-subsurface)]
-       (wayland-surface-destroy wl-surface)
-       (eglDestroySurface display surface)
-       (wl_egl_window_destroy win)
-       (eglDestroyContext context)))
+    (define/public (gl-reset-context mapped?)
+      (when (and create
+		 (or (and (not mapped?) wl-parent-surface)
+		     (and mapped? (not wl-parent-surface))))
+	(egl-finalize #f)
+	(unless mapped?
+	  (set! callback #f)
+	  (set! callback-handle #f))
+	(define-values (new-surface new-wl-surface new-wl-parent-surface new-wl-subsurface new-win)
+	  (create #t))
+	(set! surface new-surface)
+	(set! wl-surface new-wl-surface)
+	(set! wl-parent-surface new-wl-parent-surface)
+	(set! wl-subsurface new-wl-subsurface)
+	(set! win new-win)))
+
+    (define/public (egl-finalize [including-context? #t])
+      ;; If there's a parent surface, it will destroy the
+      ;; subsurface when it's destroyed
+      (unless wl-parent-surface
+	(wayland-surface-destroy wl-surface))
+      (eglDestroySurface display surface)
+      (wl_egl_window_destroy win)
+      (when including-context?
+	(eglDestroyContext display context)))
     (define/override (get-handle) context)
 
     (define cairo-mode? #t)
@@ -402,7 +424,12 @@
 
     (define/public (gl-update-size x y w h)
       (when win
-	(wl_egl_window_resize win w h 0 0)))
+	(wl_egl_window_resize win w h 0 0)
+	(when (and widget wl-subsurface)
+	  (define toplevel (gtk_widget_get_toplevel widget))
+	  (define-values (dx dy)
+	    (gtk_widget_translate_coordinates widget toplevel 0 0))
+	  (wayland-subsurface-set-position wl-subsurface dx dy))))
 
     (super-new)))
 
@@ -556,8 +583,6 @@
     (define gdk-display (gtk-maybe-widget-get-display widget))
     (define wl-display (gdk_wayland_display_get_wl_display gdk-display))
 
-    (log-error "HERE ~s ~s" gdk-display wl-display)
-
     (define eglGetPlatformDisplayEXT-addr
       (eglGetProcAddress "eglGetPlatformDisplayEXT"))
     (unless eglGetPlatformDisplayEXT-addr
@@ -613,49 +638,55 @@
     (define ctxt
       (cond
        [widget
-	(gtk_widget_realize widget)
-	(define-values (width height)
-	  (let ([a (widget-allocation widget)])
-	    (values (GtkAllocation-width a)
-                    (GtkAllocation-height a))))
-	(define toplevel (gtk_widget_get_toplevel widget))
-	(define-values (dx dy)
-	  (gtk_widget_translate_coordinates widget toplevel 0 0))
-
-	(gtk_widget_realize toplevel)
-	(define wl-surface (gdk_wayland_window_get_wl_surface
-			    (widget-window widget)))
-	(log-error "surface ~s" wl-surface)
 	(define wl-compositor (gdk_wayland_display_get_wl_compositor gdk-display))
 	(define wl-subcompositor (or (wayland-get-subcompositor wl-display)
 				     (error 'EGL "subcompositor failed")))
-	(define wl-surface/sub (or (wayland-compositor-create-surface wl-compositor)
-				   (error 'EGL "subsurface create failed")))
-	(define wl-subsurface (or (wayland-subcompositor-get-subsurface wl-subcompositor
-									wl-surface/sub
-									wl-surface)
-				  (error 'EGL "subsurface failed")))
-	(log-error "WL")
 
-	(let ([region (wayland-compositor-create-region wl-compositor)])
-	  (wayland-surface-set-input-region wl-surface/sub region)
-	  (wayland-region-destroy region))
-	(log-error "RGN")
+	(define (create recreate?)
+	  (define-values (width height)
+	    (let ([a (widget-allocation widget)])
+	      (values (GtkAllocation-width a)
+		      (GtkAllocation-height a))))
 
-	(wayland-subsurface-set-position wl-subsurface (+ 1 dx) (+ 1 dy))
-	(wayland-subsurface-set-sync wl-subsurface #f)
-	(wayland-surface-commit wl-surface/sub)
-	(wayland-surface-commit wl-surface)
-	(define win (wl_egl_window_create wl-surface/sub width height))
-	(define surface (make-win-surface win))
-	(log-error "SURFACE")
+	  (define wl-surface/sub (or (wayland-compositor-create-surface wl-compositor)
+				     (error 'EGL "subsurface create failed")))
 
-	(new egl-context% [context context]
-	     [display display] [wl-display wl-display]
-	     [surface surface] [wl-surface wl-surface/sub] [wl-parent-surface wl-surface]
-	     [wl-subsurface wl-subsurface]
-	     [widget widget]
-	     [win win])]
+	  (define toplevel (gtk_widget_get_toplevel widget))
+	  (define wl-surface (gdk_wayland_window_get_wl_surface
+			      (widget-window widget)))
+	  (define wl-subsurface (and wl-surface
+				     (or (wayland-subcompositor-get-subsurface wl-subcompositor
+									       wl-surface/sub
+									       wl-surface)
+					 (error 'EGL "subsurface failed"))))
+
+	  (when wl-surface
+	    (define-values (dx dy)
+	      (gtk_widget_translate_coordinates widget toplevel 0 0))
+
+	    (let ([region (wayland-compositor-create-region wl-compositor)])
+	      (wayland-surface-set-input-region wl-surface/sub region)
+	      (wayland-region-destroy region))
+	    (wayland-subsurface-set-position wl-subsurface dx dy)
+	    (wayland-subsurface-set-sync wl-subsurface #f)	
+	    (wayland-surface-commit wl-surface/sub)
+	    (wayland-surface-commit wl-surface))
+	  
+	  (define win (wl_egl_window_create wl-surface/sub width height))
+	  (define surface (make-win-surface win))
+	  
+	  (cond
+	   [recreate?
+	    (values surface wl-surface/sub wl-surface wl-subsurface win)]
+	   [else
+	    (new egl-context% [context context]
+		 [display display] [wl-display wl-display]
+		 [surface surface] [wl-surface wl-surface/sub] [wl-parent-surface wl-surface]
+		 [wl-subsurface wl-subsurface]
+		 [widget widget]
+		 [win win]
+		 [create create])]))
+	(create #f)]
        [else
 	(define width (send drawable get-width))
 	(define height (send drawable get-height))
@@ -679,7 +710,6 @@
 	     [cairo-surface (send drawable get-handle)] [texture-sync texture-sync]
 	     [bm drawable])]))
     (register-finalizer ctxt (λ (ctxt) (send ctxt egl-finalize)))
-    (log-error "THERE!")
     ctxt]
    [else
     (define glx-version (get-glx-version))

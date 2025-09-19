@@ -260,7 +260,7 @@
   (lambda (gtk)
     (let ([wx (gtk->wx gtk)])
       (when wx
-        (send wx unrealize)))))
+        (send wx unmap)))))
 
 (define (do-value-changed gtk dir)
   (let ([wx (gtk->wx gtk)])
@@ -452,6 +452,9 @@
          (reset-auto-scroll))
        (when dc (send dc update-canvas-size x y w h))
        (on-size))
+
+     (define/public (reset-gl-context mapped?)
+       (when dc (send dc reset-gl-context mapped?)))
      
      (set! dc (new dc% [canvas this] [transparentish? transparentish?]))
 
@@ -621,11 +624,22 @@
 		  flush-win-box)))))
      (define/public (unrealize)
        (unrealize-win-box flush-win-box))
+     (define/public (unmap)
+       (reset-gl-context #f)
+       (unrealize))
      (define/override (reset-child-freezes)
        ;; A transparent canvas can't have a native window, so we
        ;; need to release any freezes befre the window implementation
        ;; might change.
        (when (or transparentish? wayland?) (unrealize)))
+
+     (define/override (notify-children-top-realize)
+       (reset-gl-context #t))
+
+     (define/override (save-size x y w h)
+       (super save-size x y w h)
+       (when (and dc for-gl?)
+	 (send dc update-canvas-size x y w h)))
 
      (define/public (begin-refresh-sequence)
        (send dc suspend-flush))

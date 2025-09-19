@@ -28,7 +28,14 @@
               gdk_gc_unref
               gdk_gc_set_rgb_fg_color
               gdk_gc_set_line_attributes
-              gdk_draw_rectangle))
+              gdk_draw_rectangle
+
+	      update-canvas-size
+	      reset-gl-context))
+
+(define-local-member-name
+  update-canvas-size
+  reset-gl-context)
 
 (define-gdk gdk_cairo_create (_fun _pointer -> _cairo_t)
   #:wrap (allocator cairo_destroy))
@@ -220,6 +227,9 @@
     (define/public (update-canvas-size x y w h)
       (when gl
 	(send gl gl-update-size x y w h)))
+
+    (define/public (reset-gl-context mapped?)
+      (when gl (send gl gl-reset-context mapped?)))
 
     (define/override (make-backing-bitmap w h)
       (cond
