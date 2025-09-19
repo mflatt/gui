@@ -1,14 +1,16 @@
 #lang racket
 (require ffi/unsafe
          ffi/unsafe/define
-	 racket/draw/unsafe/cairo)
+	 racket/draw/unsafe/cairo
+	 (only-in "queue.rkt" wayland?))
 
 (provide create-cairo-texture-sync
          update-texture-from-cairo
 	 update-cairo-from-texture
          destroy-cairo-texture-sync)
 
-(define libgl (ffi-lib "libGL" '("1" "")))
+(define libgl (and wayland?
+		   (ffi-lib "libGL" '("1" ""))))
 
 ;; ============================================================================
 ;; Type Definitions
@@ -49,7 +51,8 @@
 ;; OpenGL Function Bindings  
 ;; ============================================================================
 
-(define-ffi-definer define-gl libgl)
+(define-ffi-definer define-gl libgl
+  #:default-make-fail make-not-available)
 
 (define-gl glGenTextures
   (_fun _GLsizei (i : (_ptr o _GLuint)) -> _void -> i))

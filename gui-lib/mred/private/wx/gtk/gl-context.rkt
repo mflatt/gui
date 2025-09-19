@@ -355,7 +355,6 @@
 		surface [wl-surface #f] [wl-parent-surface #f] [wl-subsurface #f]
 		[widget #f] [win #f]
 		[cairo-surface #f] [texture-sync #f]
-		[bm #f]
 		[create #f])
 
     (define/public (gl-reset-context mapped?)
@@ -668,13 +667,13 @@
 	      (wayland-surface-set-input-region wl-surface/sub region)
 	      (wayland-region-destroy region))
 	    (wayland-subsurface-set-position wl-subsurface dx dy)
-	    (wayland-subsurface-set-sync wl-subsurface #f)	
+	    (wayland-subsurface-set-sync wl-subsurface #f)
 	    (wayland-surface-commit wl-surface/sub)
 	    (wayland-surface-commit wl-surface))
-	  
+
 	  (define win (wl_egl_window_create wl-surface/sub width height))
 	  (define surface (make-win-surface win))
-	  
+
 	  (cond
 	   [recreate?
 	    (values surface wl-surface/sub wl-surface wl-subsurface win)]
@@ -707,8 +706,7 @@
 	     [display display] [wl-display wl-display]
 	     [surface surface] [wl-surface wl-surface]
 	     [win win]
-	     [cairo-surface (send drawable get-handle)] [texture-sync texture-sync]
-	     [bm drawable])]))
+	     [cairo-surface (send drawable get-handle)] [texture-sync texture-sync])]))
     (register-finalizer ctxt (λ (ctxt) (send ctxt egl-finalize)))
     ctxt]
    [else

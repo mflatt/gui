@@ -140,7 +140,7 @@
   (_fun _GtkWidget _pointer -> _void)
   (lambda (gtk event)
     (let ([wx (gtk->wx gtk)])
-      (when wx 
+      (when wx
         (send wx notify-children-top-realize)))))
 
 (define-cstruct _GdkEventWindowState ([type _int]
