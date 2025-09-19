@@ -16,7 +16,8 @@
          "window.rkt"
          "x11.rkt"
 	 "queue.rkt"
-	 "wayland.rkt")
+	 "wayland.rkt"
+	 "gl-cairo.rkt")
 
 (provide
  (protect-out prepare-widget-gl-context
@@ -24,7 +25,9 @@
 
               create-and-install-gl-context
               get-gdk-pixmap
-              install-gl-context))
+              install-gl-context
+	      gl-update-size
+	      gl-to-cairo-sync))
 
 (define (ffi-lib/complaint-on-failure name vers)
   (ffi-lib name vers
@@ -32,6 +35,10 @@
                     (log-warning "could not load library ~a ~a"
                                  name vers)
                     #f)))
+
+(define-local-member-name
+  gl-update-size
+  gl-to-cairo-sync)
 
 ;; ===================================================================================================
 ;; Wayland GL
@@ -87,6 +94,20 @@
   (_fun _EGLDisplay _EGLSurface _EGLSurface _EGLContext -> _EGLBoolean))
 (define-egl eglSwapBuffers
   (_fun _EGLDisplay _EGLSurface -> _EGLBoolean))
+(define-egl eglCreatePbufferSurface
+  (_fun _EGLDisplay _EGLConfig (_list i _EGLInt) -> _EGLSurface))
+(define-egl eglGetError
+  (_fun -> _EGLInt))
+(define-egl eglDestroySurface
+  (_fun _EGLDisplay _EGLSurface -> _int))
+(define-egl eglDestroyContext
+  (_fun _EGLDisplay _EGLContext -> _EGLBoolean))
+(define-egl eglGetCurrentDisplay
+  (_fun -> _EGLDisplay))
+(define-egl eglGetCurrentContext
+  (_fun -> _EGLContext))
+(define-egl eglGetCurrentSurface
+  (_fun _EGLInt -> _EGLSurface))
 
 (define-gdk gdk_wayland_display_get_wl_display (_fun _GdkDisplay -> _pointer)
   #:make-fail make-not-available)
@@ -96,11 +117,13 @@
 (define EGL_OPENGL_API #x30A2)
 (define EGL_SURFACE_TYPE #x3033)
 (define EGL_WINDOW_BIT #x0004)
+(define EGL_PBUFFER_BIT #x0001)
 (define EGL_RENDERABLE_TYPE #x3040)
 (define EGL_RENDER_BUFFER #x3086)
 (define EGL_BACK_BUFFER #x3084)
 (define EGL_SINGLE_BUFFER #x3085)
 (define EGL_OPENGL_BIT #x0008)
+(define EGL_OPENGL_ES_BIT #x0001)
 (define EGL_OPENGL_ES2_BIT #x0004)
 (define EGL_DEPTH_SIZE #x3025)
 (define EGL_STENCIL_SIZE #x3026)
@@ -109,12 +132,17 @@
 (define EGL_BLUE_SIZE #x3022)
 (define EGL_ALPHA_SIZE #x3021)
 (define EGL_NONE #x3038)
+(define EGL_WIDTH #x3057)
+(define EGL_HEIGHT #x3056)
+(define EGL_NO_SURFACE #f)
 (define EGL_CONTEXT_CLIENT_VERSION #x3098)
 (define EGL_CONTEXT_MAJOR_VERSION #x3098)
 (define EGL_CONTEXT_MINOR_VERSION #x30FB)
 (define EGL_CONTEXT_OPENGL_PROFILE_MASK #x30FD)
 (define EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT #x00000001)
 (define EGL_PLATFORM_WAYLAND_KHR #x31D8)
+(define EGL_DRAW #x3059)
+(define EGL_READ #x305A)
 
 ;; ===================================================================================================
 ;; X11/GLX FFI
@@ -305,7 +333,7 @@
                       (get-drawable-xid))
       (void))
 
-    (define/public (update-size x y w h)
+    (define/public (gl-update-size x y w h)
       (void))
 
     (super-new)))
@@ -313,44 +341,80 @@
 ;; ===================================================================================================
 ;; Wrapper for EGLContext (Wayland)
 
+(define-local-member-name
+  egl-finalize)
+
 (define egl-context%
   (class draw:gl-context%
     (init-field context
 		display wl-display
-		surface wl-surface wl-parent-surface wl-subsurface
-		widget win)
+		surface [wl-surface #f] [wl-parent-surface #f] [wl-subsurface #f]
+		[widget #f] [win #f]
+		[cairo-surface #f] [texture-sync #f]
+		[bm #f])
 
-    (define/public (finalize)
-      (wl_egl_window_destroy win)
-      (wayland-subsurface-destroy wl-subsurface)
-      (wayland-surface-destroy wl-surface)
-      (void))
+    (define/public (egl-finalize)
+      (cond
+       [wl-subsurface
+	(wayland-subsurface-destroy wl-subsurface)]
+       (wayland-surface-destroy wl-surface)
+       (eglDestroySurface display surface)
+       (wl_egl_window_destroy win)
+       (eglDestroyContext context)))
     (define/override (get-handle) context)
-    
+
+    (define cairo-mode? #t)
+
     (define/override (draw:do-call-as-current t)
       (dynamic-wind
 	  (lambda ()
 	    (eglMakeCurrent display surface surface context))
-	  t
+	  (lambda ()
+	    (when (and texture-sync cairo-mode?)
+	      (set! cairo-mode? #f)
+	      (update-texture-from-cairo texture-sync cairo-surface))
+	    (t))
 	  (lambda ()
 	    (eglMakeCurrent display #f #f #f))))
+
+    (define/public (gl-to-cairo-sync)
+      (unless cairo-mode?
+	(call-as-atomic
+	 (lambda ()
+	   (set! cairo-mode? #t)
+	   (call-with-egl-current
+	    display surface surface context
+	    (lambda ()
+	      (update-cairo-from-texture texture-sync cairo-surface)))))))
 
     (define callback #f)
     (define callback-handle #f)
  
     (define/override (draw:do-swap-buffers)
-      (unless callback
-	(eglSwapBuffers display surface)
-	(set! callback (lambda (data callback-h time)
-			 (set! callback #f)
-			 (gtk_widget_queue_draw widget)))
-	(set! callback-handle (wayland-register-surface-frame-callback wl-surface callback))
-	(wayland-surface-commit wl-surface)))
+      (when wl-surface
+	(unless callback
+	  (eglSwapBuffers display surface)
+	  (set! callback (lambda (data callback-h time)
+			   (set! callback #f)
+			   (gtk_widget_queue_draw widget)))
+	  (set! callback-handle (wayland-register-surface-frame-callback wl-surface callback))
+	  (wayland-surface-commit wl-surface))))
 
-    (define/public (update-size x y w h)
-      (wl_egl_window_resize win w h 0 0))
+    (define/public (gl-update-size x y w h)
+      (when win
+	(wl_egl_window_resize win w h 0 0)))
 
     (super-new)))
+
+(define (call-with-egl-current display d-surface r-surface context thunk)
+  (define current (list (eglGetCurrentDisplay)
+			(eglGetCurrentSurface EGL_DRAW)
+			(eglGetCurrentSurface EGL_READ)
+			(eglGetCurrentContext)))
+  (eglMakeCurrent display d-surface r-surface context)
+  (define result (thunk))
+  (apply eglMakeCurrent current)
+  result)
 
 ;; ===================================================================================================
 ;; Getting OpenGL contexts
@@ -483,49 +547,27 @@
   (define-values (err value) (glXGetFBConfigAttrib xdisplay cfg attrib))
   (if (= err Success) value bad-value))
 
-;; (or/c #f _GtkWidget) _GdkDrawable gl-config% boolean? -> gl-context%
-;;   where _GdkDrawable = (or/c _GtkWindow _GdkPixmap)
+;; (or/c #f _GtkWidget) (or/c _GdkDrawable (is-a/c bitmap%) gl-config% boolean? -> gl-context%
+;;   where X11 uses _GdkDrawable = (or/c _GtkWindow _GdkPixmap)
+;;         and Wayland uses bitmap% that holds a Cairo ARGB32 image surface
 (define (make-gtk-drawable-gl-context widget drawable conf wants-double?)
   (cond
    [wayland?
-    (gtk_widget_realize widget)
-    (define-values (width height)
-      (let ([a (widget-allocation widget)])
-	(values (GtkAllocation-width a)
-                (GtkAllocation-height a))))
-    (define-values (dx dy)
-      (gtk_widget_translate_coordinates widget (gtk_widget_get_toplevel widget) 0 0))
-    (define gdk-display (gdk_display_get_default))
+    (define gdk-display (gtk-maybe-widget-get-display widget))
     (define wl-display (gdk_wayland_display_get_wl_display gdk-display))
-    (define wl-surface (gdk_wayland_window_get_wl_surface
-			(widget-window widget)))
-    (define wl-compositor (gdk_wayland_display_get_wl_compositor gdk-display))
-    (define wl-subcompositor (or (wayland-get-subcompositor wl-display)
-				 (error 'EGL "subcompositor failed")))
-    (define wl-surface/sub (or (wayland-compositor-create-surface wl-compositor)
-			       (error 'EGL "subsurface create failed")))
-    (define wl-subsurface (or (wayland-subcompositor-get-subsurface wl-subcompositor
-								    wl-surface/sub
-								    wl-surface)
-			      (error 'EGL "subsurface failed")))
 
-    (let ([region (wayland-compositor-create-region wl-compositor)])
-      (wayland-surface-set-input-region wl-surface/sub region)
-      (wayland-region-destroy region))
+    (log-error "HERE ~s ~s" gdk-display wl-display)
 
-    (wayland-subsurface-set-position wl-subsurface (+ 1 dx) (+ 1 dy))
-    (wayland-subsurface-set-sync wl-subsurface #f)
-    (wayland-surface-commit wl-surface/sub)
-    (wayland-surface-commit wl-surface)
-    (define win (wl_egl_window_create wl-surface/sub width height))
     (define eglGetPlatformDisplayEXT-addr
       (eglGetProcAddress "eglGetPlatformDisplayEXT"))
     (unless eglGetPlatformDisplayEXT-addr
       (error 'EGL "could not get eglGetPlatformDisplayEXT"))
     (define display ((cast eglGetPlatformDisplayEXT-addr _fpointer eglGetPlatformDisplay-type)
 		     EGL_PLATFORM_WAYLAND_KHR wl-display (list EGL_NONE)))
+
     (unless (eglInitialize display)
       (error 'EGL "initialization failed"))
+
     (define accum-size (send conf get-accum-size))
     (define attribs (list
 		     EGL_SURFACE_TYPE EGL_WINDOW_BIT
@@ -539,19 +581,10 @@
 		     EGL_NONE))
     (define config (or (eglChooseConfig display attribs)
 		       (error 'EGL "configuration failed")))
+
     (unless (eglBindAPI EGL_OPENGL_API)
       (error 'EGL "API bind failed"))
-    (define eglCreatePlatformWindowSurfaceEXT-addr
-      (eglGetProcAddress "eglCreatePlatformWindowSurfaceEXT"))
-    (unless eglCreatePlatformWindowSurfaceEXT-addr
-      (error 'EGL "could not get eglCreatePlatformWindowSurfaceEXP"))
-    (define surface (or ((cast eglCreatePlatformWindowSurfaceEXT-addr
-			       _fpointer eglCreatePlatformWindowSurface-type)
-			 display config win
-			 (list
-			  EGL_RENDER_BUFFER (if wants-double? EGL_BACK_BUFFER EGL_SINGLE_BUFFER)
-			  EGL_NONE))
-			(error 'EGL "surface failed")))
+
     (define (make-context maj min)
       (define context-attribs (list
 			       EGL_CONTEXT_MAJOR_VERSION maj
@@ -565,13 +598,88 @@
 				(make-context (car ver) (cadr ver)))
 			(error 'EGL "context failed")))
 
-    (define ctxt (new egl-context% [context context]
-		      [display display] [wl-display wl-display]
-		      [surface surface] [wl-surface wl-surface/sub] [wl-parent-surface wl-surface]
-		      [wl-subsurface wl-subsurface]
-		      [widget widget]
-		      [win win]))
-    (register-finalizer ctxt (λ (ctxt) (send ctxt finalize)))
+    (define (make-win-surface win)
+      (define eglCreatePlatformWindowSurfaceEXT-addr
+	(or (eglGetProcAddress "eglCreatePlatformWindowSurfaceEXT")
+	    (error 'EGL "could not get eglCreatePlatformWindowSurfaceEXP")))
+      (or ((cast eglCreatePlatformWindowSurfaceEXT-addr
+		 _fpointer eglCreatePlatformWindowSurface-type)
+	   display config win
+	   (list
+	    EGL_RENDER_BUFFER (if wants-double? EGL_BACK_BUFFER EGL_SINGLE_BUFFER)
+	    EGL_NONE))
+	  (error 'EGL "surface failed")))
+
+    (define ctxt
+      (cond
+       [widget
+	(gtk_widget_realize widget)
+	(define-values (width height)
+	  (let ([a (widget-allocation widget)])
+	    (values (GtkAllocation-width a)
+                    (GtkAllocation-height a))))
+	(define toplevel (gtk_widget_get_toplevel widget))
+	(define-values (dx dy)
+	  (gtk_widget_translate_coordinates widget toplevel 0 0))
+
+	(gtk_widget_realize toplevel)
+	(define wl-surface (gdk_wayland_window_get_wl_surface
+			    (widget-window widget)))
+	(log-error "surface ~s" wl-surface)
+	(define wl-compositor (gdk_wayland_display_get_wl_compositor gdk-display))
+	(define wl-subcompositor (or (wayland-get-subcompositor wl-display)
+				     (error 'EGL "subcompositor failed")))
+	(define wl-surface/sub (or (wayland-compositor-create-surface wl-compositor)
+				   (error 'EGL "subsurface create failed")))
+	(define wl-subsurface (or (wayland-subcompositor-get-subsurface wl-subcompositor
+									wl-surface/sub
+									wl-surface)
+				  (error 'EGL "subsurface failed")))
+	(log-error "WL")
+
+	(let ([region (wayland-compositor-create-region wl-compositor)])
+	  (wayland-surface-set-input-region wl-surface/sub region)
+	  (wayland-region-destroy region))
+	(log-error "RGN")
+
+	(wayland-subsurface-set-position wl-subsurface (+ 1 dx) (+ 1 dy))
+	(wayland-subsurface-set-sync wl-subsurface #f)
+	(wayland-surface-commit wl-surface/sub)
+	(wayland-surface-commit wl-surface)
+	(define win (wl_egl_window_create wl-surface/sub width height))
+	(define surface (make-win-surface win))
+	(log-error "SURFACE")
+
+	(new egl-context% [context context]
+	     [display display] [wl-display wl-display]
+	     [surface surface] [wl-surface wl-surface/sub] [wl-parent-surface wl-surface]
+	     [wl-subsurface wl-subsurface]
+	     [widget widget]
+	     [win win])]
+       [else
+	(define width (send drawable get-width))
+	(define height (send drawable get-height))
+
+	(define wl-compositor (gdk_wayland_display_get_wl_compositor gdk-display))
+	(define wl-surface (or (wayland-compositor-create-surface wl-compositor)
+			       (error 'EGL "surface create failed")))
+	(define win (wl_egl_window_create wl-surface width height))
+	(define surface (make-win-surface win))
+
+	(define texture-sync
+	  (call-with-egl-current
+	   display surface surface context
+	   (lambda ()
+	     (create-cairo-texture-sync width height))))		
+
+	(new egl-context% [context context]
+	     [display display] [wl-display wl-display]
+	     [surface surface] [wl-surface wl-surface]
+	     [win win]
+	     [cairo-surface (send drawable get-handle)] [texture-sync texture-sync]
+	     [bm drawable])]))
+    (register-finalizer ctxt (λ (ctxt) (send ctxt egl-finalize)))
+    (log-error "THERE!")
     ctxt]
    [else
     (define glx-version (get-glx-version))
@@ -696,6 +804,11 @@
    (lambda ()
      (make-gtk-drawable-gl-context #f pixmap conf #f))))
 
+(define (make-wayland-gl-context bm conf)
+  (call-as-atomic
+   (lambda ()
+     (make-gtk-drawable-gl-context #f bm conf #f))))
+
 ;; ===================================================================================================
 
 (define widget-config-hash (make-weak-hasheq))
@@ -712,5 +825,7 @@
   install-gl-context)
 
 (define (create-and-install-gl-context bm conf)
-  (define ctxt (make-gtk-pixmap-gl-context (send bm get-gdk-pixmap) conf))
+  (define ctxt (if wayland?
+		   (make-wayland-gl-context bm conf)
+		   (make-gtk-pixmap-gl-context (send bm get-gdk-pixmap) conf)))
   (and ctxt (send bm install-gl-context ctxt)))

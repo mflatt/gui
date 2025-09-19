@@ -22,6 +22,7 @@
  (protect-out dc%
               do-backing-flush
               x11-bitmap%
+              cairo-bitmap%
 
               gdk_gc_new
               gdk_gc_unref
@@ -143,12 +144,35 @@
 (define cairo-bitmap%
   (class bitmap%
     (init w h gtk)
+
+    (define gl #f)
+    (define/public (install-gl-context new-gl) (set! gl new-gl))
+    (define/override (get-bitmap-gl-context) gl)
+
+    (define/override (make-dc)
+      (if gl
+	  (make-object gl-sync-bitmap-dc% this gl)
+	  (super make-dc)))
+
+    (define/override (surface-flush)
+      (when gl (send gl gl-to-cairo-sync))
+      (super surface-flush))
+
     (super-make-object w h #f #t
 		       (if gtk3?
 			   (if gtk
 			       (->screen (exact->inexact (gtk_widget_get_scale_factor gtk)))
 			       (display-bitmap-resolution 0 (lambda () 1.0)))
 			   (->screen 1.0)))))
+
+(define gl-sync-bitmap-dc%
+  (class -bitmap-dc%
+    (init bm gl-context)
+    (define gl gl-context)
+    (define/override (get-cr)
+      (send gl gl-to-cairo-sync)
+      (super get-cr))
+    (super-make-object bm)))
 
 (define win32-bitmap%
   (class bitmap%
@@ -195,7 +219,7 @@
 
     (define/public (update-canvas-size x y w h)
       (when gl
-	(send gl update-size x y w h)))
+	(send gl gl-update-size x y w h)))
 
     (define/override (make-backing-bitmap w h)
       (cond
